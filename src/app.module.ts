@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { ServeStaticModule } from '@nestjs/serve-static';
+// import { ServeStaticModule } from '@nestjs/serve-static'; // REMOVED - not installed
 import { ScheduleModule } from '@nestjs/schedule';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { join } from 'path';
@@ -37,11 +37,11 @@ import { AppService } from './app.service';
     ScheduleModule.forRoot(),
     EventEmitterModule.forRoot(),
 
-    // Serve static files (for frontend if needed)
-    ServeStaticModule.forRoot({
-      rootPath: join(__dirname, '..', 'public'),
-      exclude: ['/api*'],
-    }),
+    // Serve static files (REMOVED - module not installed)
+    // ServeStaticModule.forRoot({
+    //   rootPath: join(__dirname, '..', 'public'),
+    //   exclude: ['/api*'],
+    // }),
 
     // Your application modules (add back once working)
     // AuthModule,
