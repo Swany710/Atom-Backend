@@ -7,4 +7,3 @@ export * from './name.parser';
 export * from './path.solver';
 export * from './source-root.helpers';
 export * from './formatting';
-export * from './object-sorting';
