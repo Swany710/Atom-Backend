@@ -1,18 +1,9 @@
- {
+{
   "$schema": "https://railway.com/railway.schema.json",
   "build": {
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "runtime": "V2",
-    "numReplicas": 1,
-    "startCommand": "npm run start:prod",
-    "sleepApplication": false,
-    "multiRegionConfig": {
-      "us-east4-gqdc4": {
-        "numReplicas": 1
-      }
-    },
-    "restartPolicyType": "ON_FAILURE",
-    "restartPolicyMaxRetries": 10
+    "startCommand": "npm run start:prod"
   }
+}
