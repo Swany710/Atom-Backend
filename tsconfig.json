@@ -1,21 +1,26 @@
 {
   "compilerOptions": {
-    "incremental": false,
-    "outDir": "./dist",
-    "target": "ES2021",
     "module": "commonjs",
     "declaration": true,
+    "removeComments": true,
     "emitDecoratorMetadata": true,
     "experimentalDecorators": true,
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true, // ✅ this must have a comma above and below it
+    "target": "ES2021",
     "sourceMap": true,
-    "removeComments": true,
+    "outDir": "./dist",
+    "baseUrl": "./",
+    "incremental": false,
+    "skipLibCheck": true,
     "strictNullChecks": false,
     "noImplicitAny": false,
-    "baseUrl": "./",
+    "strictBindCallApply": false,
+    "forceConsistentCasingInFileNames": false,
+    "noFallthroughCasesInSwitch": false,
     "paths": {
       "@/*": ["src/*"]
-    },
-    "skipLibCheck": true
+    }
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]

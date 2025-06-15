@@ -16,7 +16,7 @@ exports.VoiceController = void 0;
 const common_1 = require("@nestjs/common");
 const platform_express_1 = require("@nestjs/platform-express");
 const voice_transcription_service_1 = require("./voice-transcription.service");
-const axios_1 = require("axios");
+const axios = require("axios");
 let VoiceController = class VoiceController {
     constructor(transcriptionService) {
         this.transcriptionService = transcriptionService;
@@ -27,7 +27,7 @@ let VoiceController = class VoiceController {
         }
         const transcription = await this.transcriptionService.transcribeAudio(file.buffer, 'mp3');
         try {
-            await axios_1.default.post('https://your-n8n-domain/webhook/voice', {
+            await axios.post('https://your-n8n-domain/webhook/voice', {
                 text: transcription,
                 timestamp: new Date().toISOString(),
             });
