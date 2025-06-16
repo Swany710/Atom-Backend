@@ -3,4 +3,4 @@ WORKDIR /app
 COPY . . 
 RUN npm install 
 RUN npm run build 
-CMD ["node", "dist/main"] 
+CMD ["node", "dist/main.js"] 
