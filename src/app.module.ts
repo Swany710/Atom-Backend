@@ -11,9 +11,12 @@ import { join } from 'path';
 
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
+import { HealthModule } from './health/health.module';
+
 
 @Module({
   imports: [
+    HealthModule,
     // Configuration
     ConfigModule.forRoot({
       isGlobal: true,
