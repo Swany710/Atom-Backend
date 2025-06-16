@@ -4,6 +4,16 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "startCommand": "npm run start:prod"
+    "runtime": "V2",
+    "numReplicas": 1,
+    "startCommand": "npm run start:prod",
+    "sleepApplication": false,
+    "multiRegionConfig": {
+      "us-east4-eqdc4a": {
+        "numReplicas": 1
+      }
+    },
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10
   }
 }
