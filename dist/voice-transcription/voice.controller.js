@@ -11,15 +11,29 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 var __param = (this && this.__param) || function (paramIndex, decorator) {
     return function (target, key) { decorator(target, key, paramIndex); }
 };
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.VoiceController = void 0;
 const common_1 = require("@nestjs/common");
 const platform_express_1 = require("@nestjs/platform-express");
 const voice_transcription_service_1 = require("./voice-transcription.service");
-const axios = require("axios");
+const axios_1 = __importDefault(require("axios"));
 let VoiceController = class VoiceController {
     constructor(transcriptionService) {
         this.transcriptionService = transcriptionService;
+    }
+    async triggerWebhook() {
+        const webhookUrl = 'https://swany.app.n8n.cloud/webhook/voice-command';
+        try {
+            await axios_1.default.get(webhookUrl);
+            return { status: 'Webhook triggered' };
+        }
+        catch (error) {
+            console.error('Webhook trigger failed:', error.message);
+            throw new common_1.HttpException('Webhook failed', common_1.HttpStatus.BAD_GATEWAY);
+        }
     }
     async transcribe(file) {
         if (!file) {
@@ -27,18 +41,24 @@ let VoiceController = class VoiceController {
         }
         const transcription = await this.transcriptionService.transcribeAudio(file.buffer, 'mp3');
         try {
-            await axios.post('https://your-n8n-domain/webhook/voice', {
+            await axios_1.default.post('https://swany.app.n8n.cloud/webhook/voice-command', {
                 text: transcription,
                 timestamp: new Date().toISOString(),
             });
         }
         catch (error) {
-            console.error('Failed to trigger N8N webhook:', error.message);
+            console.error('Failed to send transcription to n8n:', error.message);
         }
         return { transcription };
     }
 };
 exports.VoiceController = VoiceController;
+__decorate([
+    (0, common_1.Get)(),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", []),
+    __metadata("design:returntype", Promise)
+], VoiceController.prototype, "triggerWebhook", null);
 __decorate([
     (0, common_1.Post)('transcribe'),
     (0, common_1.UseInterceptors)((0, platform_express_1.FileInterceptor)('file')),
@@ -48,7 +68,7 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], VoiceController.prototype, "transcribe", null);
 exports.VoiceController = VoiceController = __decorate([
-    (0, common_1.Controller)('voice'),
+    (0, common_1.Controller)('trigger'),
     __metadata("design:paramtypes", [voice_transcription_service_1.VoiceTranscriptionService])
 ], VoiceController);
 //# sourceMappingURL=voice.controller.js.map

@@ -1,5 +1,6 @@
 import {
   Controller,
+  Get,
   Post,
   UploadedFile,
   UseInterceptors,
@@ -9,13 +10,25 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { VoiceTranscriptionService } from './voice-transcription.service';
 import { Express } from 'express';
-import axios = require('axios');
+import axios from 'axios';
 
-@Controller('voice')
+@Controller('trigger')
 export class VoiceController {
   constructor(
-    private readonly transcriptionService: VoiceTranscriptionService,
+    private readonly transcriptionService: VoiceTranscriptionService
   ) {}
+
+  @Get()
+  async triggerWebhook() {
+    const webhookUrl = 'https://swany.app.n8n.cloud/webhook/voice-command';
+    try {
+      await axios.get(webhookUrl);
+      return { status: 'Webhook triggered' };
+    } catch (error) {
+      console.error('Webhook trigger failed:', error.message);
+      throw new HttpException('Webhook failed', HttpStatus.BAD_GATEWAY);
+    }
+  }
 
   @Post('transcribe')
   @UseInterceptors(FileInterceptor('file'))
@@ -26,15 +39,16 @@ export class VoiceController {
 
     const transcription = await this.transcriptionService.transcribeAudio(
       file.buffer,
-      'mp3',
+      'mp3'
     );
+
     try {
-      await axios.post('https://your-n8n-domain/webhook/voice', {
+      await axios.post('https://swany.app.n8n.cloud/webhook/voice-command', {
         text: transcription,
         timestamp: new Date().toISOString(),
       });
     } catch (error) {
-      console.error('Failed to trigger N8N webhook:', error.message);
+      console.error('Failed to send transcription to n8n:', error.message);
     }
 
     return { transcription };
