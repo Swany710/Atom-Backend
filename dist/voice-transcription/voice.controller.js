@@ -18,57 +18,39 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.VoiceController = void 0;
 const common_1 = require("@nestjs/common");
 const platform_express_1 = require("@nestjs/platform-express");
-const voice_transcription_service_1 = require("./voice-transcription.service");
 const axios_1 = __importDefault(require("axios"));
+const form_data_1 = __importDefault(require("form-data"));
 let VoiceController = class VoiceController {
-    constructor(transcriptionService) {
-        this.transcriptionService = transcriptionService;
-    }
-    async triggerWebhook() {
-        const webhookUrl = 'https://swany.app.n8n.cloud/webhook/voice-command';
+    async handleVoiceCommand(file) {
+        if (!file)
+            throw new common_1.BadRequestException('No file uploaded');
+        const form = new form_data_1.default();
+        form.append('data', file.buffer, {
+            filename: file.originalname,
+            contentType: file.mimetype,
+        });
         try {
-            await axios_1.default.get(webhookUrl);
-            return { status: 'Webhook triggered' };
-        }
-        catch (error) {
-            console.error('Webhook trigger failed:', error.message);
-            throw new common_1.HttpException('Webhook failed', common_1.HttpStatus.BAD_GATEWAY);
-        }
-    }
-    async transcribe(file) {
-        if (!file) {
-            throw new common_1.HttpException('No file uploaded', common_1.HttpStatus.BAD_REQUEST);
-        }
-        const transcription = await this.transcriptionService.transcribeAudio(file.buffer, 'mp3');
-        try {
-            await axios_1.default.post('https://swany.app.n8n.cloud/webhook/voice-command', {
-                text: transcription,
-                timestamp: new Date().toISOString(),
+            await axios_1.default.post('https://swany.app.n8n.cloud/webhook/voice-command', form, {
+                headers: form.getHeaders(),
             });
+            return { status: 'sent to n8n' };
         }
-        catch (error) {
-            console.error('Failed to send transcription to n8n:', error.message);
+        catch (err) {
+            console.error('Failed to send to n8n:', err.message);
+            throw new common_1.HttpException('Failed to forward file to n8n', common_1.HttpStatus.BAD_GATEWAY);
         }
-        return { transcription };
     }
 };
 exports.VoiceController = VoiceController;
 __decorate([
-    (0, common_1.Get)(),
-    __metadata("design:type", Function),
-    __metadata("design:paramtypes", []),
-    __metadata("design:returntype", Promise)
-], VoiceController.prototype, "triggerWebhook", null);
-__decorate([
-    (0, common_1.Post)('transcribe'),
-    (0, common_1.UseInterceptors)((0, platform_express_1.FileInterceptor)('file')),
+    (0, common_1.Post)('voice-command'),
+    (0, common_1.UseInterceptors)((0, platform_express_1.FileInterceptor)('data')),
     __param(0, (0, common_1.UploadedFile)()),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [Object]),
     __metadata("design:returntype", Promise)
-], VoiceController.prototype, "transcribe", null);
+], VoiceController.prototype, "handleVoiceCommand", null);
 exports.VoiceController = VoiceController = __decorate([
-    (0, common_1.Controller)('trigger'),
-    __metadata("design:paramtypes", [voice_transcription_service_1.VoiceTranscriptionService])
+    (0, common_1.Controller)('voice')
 ], VoiceController);
 //# sourceMappingURL=voice.controller.js.map

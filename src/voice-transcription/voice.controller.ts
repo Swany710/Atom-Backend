@@ -1,56 +1,38 @@
 import {
   Controller,
-  Get,
   Post,
   UploadedFile,
   UseInterceptors,
+  BadRequestException,
   HttpException,
   HttpStatus,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { VoiceTranscriptionService } from './voice-transcription.service';
 import { Express } from 'express';
 import axios from 'axios';
+import FormData from 'form-data';
 
-@Controller('trigger')
+@Controller('voice')
 export class VoiceController {
-  constructor(
-    private readonly transcriptionService: VoiceTranscriptionService
-  ) {}
+  @Post('voice-command')
+  @UseInterceptors(FileInterceptor('data')) // <-- THIS MUST MATCH YOUR FORM FIELD NAME
+  async handleVoiceCommand(@UploadedFile() file: Express.Multer.File) {
+    if (!file) throw new BadRequestException('No file uploaded');
 
-  @Get()
-  async triggerWebhook() {
-    const webhookUrl = 'https://swany.app.n8n.cloud/webhook/voice-command';
-    try {
-      await axios.get(webhookUrl);
-      return { status: 'Webhook triggered' };
-    } catch (error) {
-      console.error('Webhook trigger failed:', error.message);
-      throw new HttpException('Webhook failed', HttpStatus.BAD_GATEWAY);
-    }
-  }
-
-  @Post('transcribe')
-  @UseInterceptors(FileInterceptor('file'))
-  async transcribe(@UploadedFile() file: Express.Multer.File) {
-    if (!file) {
-      throw new HttpException('No file uploaded', HttpStatus.BAD_REQUEST);
-    }
-
-    const transcription = await this.transcriptionService.transcribeAudio(
-      file.buffer,
-      'mp3'
-    );
+    const form = new FormData();
+    form.append('data', file.buffer, {
+      filename: file.originalname,
+      contentType: file.mimetype,
+    });
 
     try {
-      await axios.post('https://swany.app.n8n.cloud/webhook/voice-command', {
-        text: transcription,
-        timestamp: new Date().toISOString(),
+      await axios.post('https://swany.app.n8n.cloud/webhook/voice-command', form, {
+        headers: form.getHeaders(),
       });
-    } catch (error) {
-      console.error('Failed to send transcription to n8n:', error.message);
+      return { status: 'sent to n8n' };
+    } catch (err) {
+      console.error('Failed to send to n8n:', err.message);
+      throw new HttpException('Failed to forward file to n8n', HttpStatus.BAD_GATEWAY);
     }
-
-    return { transcription };
   }
 }

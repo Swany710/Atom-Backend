@@ -1,11 +1,5 @@
-import { VoiceTranscriptionService } from './voice-transcription.service';
 export declare class VoiceController {
-    private readonly transcriptionService;
-    constructor(transcriptionService: VoiceTranscriptionService);
-    triggerWebhook(): Promise<{
+    handleVoiceCommand(file: Express.Multer.File): Promise<{
         status: string;
-    }>;
-    transcribe(file: Express.Multer.File): Promise<{
-        transcription: string;
     }>;
 }
