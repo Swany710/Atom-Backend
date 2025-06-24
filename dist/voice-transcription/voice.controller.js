@@ -25,15 +25,16 @@ let VoiceController = class VoiceController {
         if (!file)
             throw new common_1.BadRequestException('No file uploaded');
         const form = new form_data_1.default();
-        form.append('data', file.buffer, {
+        form.append('file', file.buffer, {
             filename: file.originalname,
             contentType: file.mimetype,
         });
         try {
-            await axios_1.default.post('https://swany.app.n8n.cloud/webhook/voice-command', form, {
-                headers: form.getHeaders(),
-            });
-            return { status: 'sent to n8n' };
+            const n8nResponse = await axios_1.default.post('https://swany.app.n8n.cloud/webhook-test/voice-command', form, { headers: form.getHeaders() });
+            return {
+                status: 'sent to n8n',
+                result: n8nResponse.data,
+            };
         }
         catch (err) {
             console.error('Failed to send to n8n:', err.message);

@@ -1,26 +1,32 @@
+// src/app.module.ts
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
-// import { ServeStaticModule } from '@nestjs/serve-static'; // REMOVED - not installed
 import { ScheduleModule } from '@nestjs/schedule';
 import { EventEmitterModule } from '@nestjs/event-emitter';
-import { join } from 'path';
+import { HttpModule } from '@nestjs/axios';
 
-// Import your modules (commented out for initial build)
-// import { AuthModule } from './auth/auth.module';
-
+// Existing controllers and services
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
-
+// New AI integration
+import { AIVoiceController } from './ai/ai-voice.controller';
+import { AIVoiceService } from './ai/ai-voice.service';
+import { N8NService } from './n8n/n8n.service';
 
 @Module({
   imports: [
-  
     // Configuration
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: ['.env.local', '.env'],
+    }),
+
+    // HTTP module for N8N webhook calls
+    HttpModule.register({
+      timeout: 30000,
+      maxRedirects: 5,
     }),
 
     // Database (optional for initial build)
@@ -39,17 +45,15 @@ import { AppService } from './app.service';
     // Other core modules
     ScheduleModule.forRoot(),
     EventEmitterModule.forRoot(),
-
-    // Serve static files (REMOVED - module not installed)
-    // ServeStaticModule.forRoot({
-    //   rootPath: join(__dirname, '..', 'public'),
-    //   exclude: ['/api*'],
-    // }),
-
-    // Your application modules (add back once working)
-    // AuthModule,
   ],
-  controllers: [AppController],
-  providers: [AppService],
+  controllers: [
+    AppController,        // Your existing controller
+    AIVoiceController,    // New AI controller
+  ],
+  providers: [
+    AppService,           // Your existing service
+    AIVoiceService,       // New AI service
+    N8NService,           // New N8N service
+  ],
 })
 export class AppModule {}
