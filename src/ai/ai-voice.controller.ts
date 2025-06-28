@@ -1,4 +1,4 @@
-// src/ai/ai-voice.controller.ts
+// src/ai/ai-voice.controller.ts - DEBUG VERSION
 import { Controller, Post, Body, Get, Logger } from '@nestjs/common';
 import { AIVoiceService } from './ai-voice.service';
 
@@ -42,9 +42,21 @@ export class AIVoiceController {
   @Post('voice-command')
   async processVoiceCommand(@Body() dto: VoiceCommandDto) {
     this.logger.log('Processing voice command');
+    
+    // DEBUG: Log what we actually received
+    this.logger.log(`Received DTO: ${JSON.stringify({
+      hasAudio: !!dto.audio,
+      audioLength: dto.audio?.length || 0,
+      hasMessage: !!dto.message,
+      message: dto.message,
+      format: dto.format,
+      dtoKeys: Object.keys(dto || {}),
+      dtoType: typeof dto
+    })}`);
 
     try {
       if (dto.message && !dto.audio) {
+        this.logger.log('Processing as text input');
         const result = await this.aiVoiceService.processMessage(dto.message);
         
         return {
@@ -54,11 +66,15 @@ export class AIVoiceController {
           timestamp: new Date().toISOString(),
         };
       } else if (dto.audio) {
+        this.logger.log(`Processing as audio input, length: ${dto.audio.length}`);
         const audioBuffer = Buffer.from(dto.audio, 'base64');
+        this.logger.log(`Audio buffer size: ${audioBuffer.length} bytes`);
+        
         const result = await this.aiVoiceService.processVoiceCommand(audioBuffer);
         
         return result;
       } else {
+        this.logger.error(`No audio or text provided. DTO: ${JSON.stringify(dto)}`);
         throw new Error('No audio or text provided');
       }
 
