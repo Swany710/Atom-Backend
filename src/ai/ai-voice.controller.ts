@@ -1,9 +1,10 @@
-// src/ai/ai-voice.controller.ts - DEBUG VERSION
+// src/ai/ai-voice.controller.ts - FIXED FIELD NAMES
 import { Controller, Post, Body, Get, Logger } from '@nestjs/common';
 import { AIVoiceService } from './ai-voice.service';
 
 export class VoiceCommandDto {
-  audio?: string;
+  audio?: string;      // backend expects this
+  audioData?: string;  // frontend sends this
   format?: string;
   message?: string;
 }
@@ -43,19 +44,20 @@ export class AIVoiceController {
   async processVoiceCommand(@Body() dto: VoiceCommandDto) {
     this.logger.log('Processing voice command');
     
-    // DEBUG: Log what we actually received
+    // FIXED: Handle both 'audio' and 'audioData' field names
+    const audioData = dto.audio || dto.audioData;
+    
     this.logger.log(`Received DTO: ${JSON.stringify({
-      hasAudio: !!dto.audio,
-      audioLength: dto.audio?.length || 0,
+      hasAudio: !!audioData,
+      audioLength: audioData?.length || 0,
       hasMessage: !!dto.message,
       message: dto.message,
       format: dto.format,
-      dtoKeys: Object.keys(dto || {}),
-      dtoType: typeof dto
+      dtoKeys: Object.keys(dto || {})
     })}`);
 
     try {
-      if (dto.message && !dto.audio) {
+      if (dto.message && !audioData) {
         this.logger.log('Processing as text input');
         const result = await this.aiVoiceService.processMessage(dto.message);
         
@@ -65,9 +67,9 @@ export class AIVoiceController {
           response: result.response,
           timestamp: new Date().toISOString(),
         };
-      } else if (dto.audio) {
-        this.logger.log(`Processing as audio input, length: ${dto.audio.length}`);
-        const audioBuffer = Buffer.from(dto.audio, 'base64');
+      } else if (audioData) {
+        this.logger.log(`Processing as audio input, length: ${audioData.length}`);
+        const audioBuffer = Buffer.from(audioData, 'base64');
         this.logger.log(`Audio buffer size: ${audioBuffer.length} bytes`);
         
         const result = await this.aiVoiceService.processVoiceCommand(audioBuffer);
