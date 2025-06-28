@@ -20,10 +20,10 @@ let AppController = class AppController {
         return this.appService.getHello();
     }
     getHealth() {
-        return this.appService.getHealth();
-    }
-    getVersion() {
-        return this.appService.getVersion();
+        return {
+            status: 'ok',
+            timestamp: new Date().toISOString(),
+        };
     }
 };
 exports.AppController = AppController;
@@ -39,12 +39,6 @@ __decorate([
     __metadata("design:paramtypes", []),
     __metadata("design:returntype", void 0)
 ], AppController.prototype, "getHealth", null);
-__decorate([
-    (0, common_1.Get)('version'),
-    __metadata("design:type", Function),
-    __metadata("design:paramtypes", []),
-    __metadata("design:returntype", void 0)
-], AppController.prototype, "getVersion", null);
 exports.AppController = AppController = __decorate([
     (0, common_1.Controller)(),
     __metadata("design:paramtypes", [app_service_1.AppService])

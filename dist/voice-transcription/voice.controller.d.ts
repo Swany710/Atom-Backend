@@ -1,6 +1,15 @@
+interface MulterFile {
+    fieldname: string;
+    originalname: string;
+    encoding: string;
+    mimetype: string;
+    size: number;
+    buffer: Buffer;
+}
 export declare class VoiceController {
-    handleVoiceCommand(file: Express.Multer.File): Promise<{
+    handleVoiceCommand(file: MulterFile): Promise<{
         status: string;
-        result: unknown;
+        result: any;
     }>;
 }
+export {};
