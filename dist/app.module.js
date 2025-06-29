@@ -14,7 +14,6 @@ const schedule_1 = require("@nestjs/schedule");
 const event_emitter_1 = require("@nestjs/event-emitter");
 const conversation_module_1 = require("./conversation/conversation.module");
 const ai_voice_module_1 = require("./ai/ai-voice.module");
-const n8n_voice_module_1 = require("./voice-transcription/n8n-voice.module");
 const app_controller_1 = require("./app.controller");
 const app_service_1 = require("./app.service");
 const conversation_entity_1 = require("./conversation/entities/conversation.entity");
@@ -32,32 +31,39 @@ exports.AppModule = AppModule = __decorate([
             }),
             typeorm_1.TypeOrmModule.forRootAsync({
                 inject: [config_1.ConfigService],
-                useFactory: (configService) => ({
-                    type: 'postgres',
-                    url: configService.get('SUPABASE_DATABASE_URL') || configService.get('DATABASE_URL'),
-                    entities: [
-                        conversation_entity_1.Conversation,
-                        conversation_message_entity_1.ConversationMessage,
-                        user_conversation_settings_entity_1.UserConversationSettings,
-                    ],
-                    synchronize: configService.get('NODE_ENV') !== 'production',
-                    logging: configService.get('NODE_ENV') === 'development',
-                    ssl: configService.get('NODE_ENV') === 'production' ? {
-                        rejectUnauthorized: false
-                    } : false,
-                    extra: {
-                        max: 10,
-                        min: 1,
-                        idleTimeoutMillis: 30000,
-                        connectionTimeoutMillis: 2000,
-                    },
-                }),
+                useFactory: (configService) => {
+                    const databaseUrl = configService.get('SUPABASE_DATABASE_URL') || configService.get('DATABASE_URL');
+                    return {
+                        type: 'postgres',
+                        url: databaseUrl,
+                        entities: [
+                            conversation_entity_1.Conversation,
+                            conversation_message_entity_1.ConversationMessage,
+                            user_conversation_settings_entity_1.UserConversationSettings,
+                        ],
+                        synchronize: configService.get('NODE_ENV') !== 'production',
+                        logging: configService.get('NODE_ENV') === 'development',
+                        ssl: {
+                            rejectUnauthorized: false
+                        },
+                        extra: {
+                            max: 10,
+                            min: 1,
+                            idleTimeoutMillis: 30000,
+                            connectionTimeoutMillis: 10000,
+                            family: 4,
+                            keepAlive: true,
+                            keepAliveInitialDelayMillis: 0,
+                        },
+                        retryAttempts: 3,
+                        retryDelay: 3000,
+                    };
+                },
             }),
             schedule_1.ScheduleModule.forRoot(),
             event_emitter_1.EventEmitterModule.forRoot(),
             conversation_module_1.ConversationModule,
             ai_voice_module_1.AIVoiceModule,
-            n8n_voice_module_1.N8NVoiceModule,
         ],
         controllers: [app_controller_1.AppController],
         providers: [app_service_1.AppService],
