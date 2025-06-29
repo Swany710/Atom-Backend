@@ -1,4 +1,4 @@
-// src/voice-transcription/voice.controller.ts - FIXED IMPORT
+// src/voice-transcription/voice.controller.ts - Updated to avoid conflicts
 import {
   Controller,
   Post,
@@ -10,9 +10,8 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import axios from 'axios';
-import FormData from 'form-data'; // FIXED: Changed from import * as FormData
+import FormData from 'form-data';
 
-// FIXED: Use proper type for uploaded file
 interface MulterFile {
   fieldname: string;
   originalname: string;
@@ -22,14 +21,14 @@ interface MulterFile {
   buffer: Buffer;
 }
 
-@Controller('voice')
-export class VoiceController {
-  @Post('voice-command')
+@Controller('n8n-voice') // Changed from 'voice' to avoid conflicts
+export class N8NVoiceController { // Renamed class
+  @Post('webhook') // Changed endpoint name
   @UseInterceptors(FileInterceptor('data'))
-  async handleVoiceCommand(@UploadedFile() file: MulterFile) {
+  async forwardToN8N(@UploadedFile() file: MulterFile) { // Renamed method
     if (!file) throw new BadRequestException('No file uploaded');
 
-    const form = new FormData(); // This will now work
+    const form = new FormData();
     form.append('file', file.buffer, {
       filename: file.originalname,
       contentType: file.mimetype,

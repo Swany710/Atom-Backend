@@ -6,10 +6,10 @@ interface MulterFile {
     size: number;
     buffer: Buffer;
 }
-export declare class VoiceController {
-    handleVoiceCommand(file: MulterFile): Promise<{
+export declare class N8NVoiceController {
+    forwardToN8N(file: MulterFile): Promise<{
         status: string;
-        result: any;
+        result: unknown;
     }>;
 }
 export {};

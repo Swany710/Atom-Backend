@@ -42,11 +42,12 @@ export class ConversationController {
   @Get('context/:sessionId')
   async getContext(
     @Param('sessionId') sessionId: string,
-    @Query('windowSize') windowSize?: number
+    @Query('windowSize') windowSize?: string
   ) {
+    const windowSizeNum = windowSize ? parseInt(windowSize, 10) : 10;
     const context = await this.conversationService.getConversationContext(
       sessionId,
-      windowSize ? parseInt(windowSize as string) : 10
+      windowSizeNum
     );
     return {
       success: true,
@@ -57,11 +58,12 @@ export class ConversationController {
   @Get('messages/:sessionId')
   async getMessages(
     @Param('sessionId') sessionId: string,
-    @Query('limit') limit?: number
+    @Query('limit') limit?: string
   ) {
+    const limitNum = limit ? parseInt(limit, 10) : 10;
     const messages = await this.conversationService.getConversationMessages(
       sessionId,
-      limit ? parseInt(limit as string) : 10
+      limitNum
     );
     return {
       success: true,
@@ -81,11 +83,12 @@ export class ConversationController {
   @Get('recent/:userId')
   async getRecentConversations(
     @Param('userId') userId: string,
-    @Query('limit') limit?: number
+    @Query('limit') limit?: string
   ) {
+    const limitNum = limit ? parseInt(limit, 10) : 10;
     const conversations = await this.conversationService.getRecentConversations(
       userId,
-      limit ? parseInt(limit as string) : 10
+      limitNum
     );
     return {
       success: true,
@@ -101,5 +104,4 @@ export class ConversationController {
       settings
     };
   }
-} 
- 
+}
