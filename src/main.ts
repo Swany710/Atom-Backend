@@ -9,11 +9,14 @@ async function bootstrap() {
   app.setGlobalPrefix('api/v1', {
     exclude: ['/', '/health']
   });
-
-  const port = process.env.PORT || 3000;
-  await app.listen(port);
+app.enableCors({
+    origin: ['http://localhost:3000', 'https://atom-frontend-production-u...', 'https://your-frontend-domain.com'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  });
   
-  console.log(`🚀 API running on port ${port}`);
+  await app.listen(process.env.PORT || 3000);
 }
+
 
 bootstrap();
