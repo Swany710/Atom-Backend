@@ -1,6 +1,7 @@
 import {
   Controller,
   Post,
+  Get,
   Body,
   UploadedFile,
   UseInterceptors,
@@ -41,11 +42,29 @@ interface MulterFile {
   buffer: Buffer;
 }
 
-@Controller('ai')
+@Controller('api/v1/ai')
 export class AIVoiceController {
   constructor(private readonly aiVoiceService: AIVoiceService) {}
 
-  @Post('text-command')
+  @Get('health')
+  getHealth() {
+    return { 
+      status: 'ok', 
+      service: 'AI Voice Service',
+      timestamp: new Date().toISOString()
+    };
+  }
+
+  @Get('status') 
+  getStatus() {
+    return {
+      status: 'available',
+      aiService: 'online',
+      timestamp: new Date().toISOString()
+    };
+  }
+
+  @Post('text')
   async handleTextCommand(@Body() body: TextCommandRequest): Promise<TextCommandResponse> {
     if (!body.message) {
       throw new BadRequestException('Message is required');
@@ -66,13 +85,17 @@ export class AIVoiceController {
     } catch (error) {
       console.error('Text command error:', error);
       throw new HttpException(
-        'Failed to process text command',
+        {
+          message: 'Failed to process text command', 
+          error: error.message,
+          statusCode: HttpStatus.INTERNAL_SERVER_ERROR
+        },
         HttpStatus.INTERNAL_SERVER_ERROR
       );
     }
   }
 
-  @Post('voice-command')
+  @Post('voice')
   @UseInterceptors(FileInterceptor('audio'))
   async handleVoiceCommand(
     @UploadedFile() file: MulterFile,
