@@ -1,47 +1,34 @@
 import { AppService } from './app.service';
-interface TextCommandRequest {
-    message: string;
-    userId?: string;
-    conversationId?: string;
-}
 export declare class AppController {
     private readonly appService;
-    private conversations;
     constructor(appService: AppService);
     getHello(): string;
     getHealth(): {
         status: string;
         timestamp: string;
     };
+    getTest(): {
+        message: string;
+        timestamp: string;
+    };
     getAIHealth(): {
         status: string;
-        service: string;
+        message: string;
         timestamp: string;
-        version: string;
     };
     getAIStatus(): {
         status: string;
-        aiService: string;
-        mode: string;
+        message: string;
         timestamp: string;
     };
-    handleTextCommand(body: TextCommandRequest): Promise<{
+    postAIText(body: any): {
         message: string;
-        conversationId: string;
-        timestamp: Date;
-        mode: string;
-    }>;
-    handleVoiceCommand(body: any): Promise<{
+        input: any;
+        timestamp: string;
+    };
+    postAIVoice(body: any): {
         message: string;
         transcription: string;
-        conversationId: string;
-        timestamp: Date;
-        mode: string;
-    }>;
-    getUserConversations(): {
-        conversations: string[];
-        count: number;
-        mode: string;
+        timestamp: string;
     };
 }
-export {};
