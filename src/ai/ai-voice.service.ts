@@ -1,132 +1,290 @@
-// src/ai/ai-voice.service.ts
+// src/ai/ai-voice.service.ts - UPDATED WITH MEMORY
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import OpenAI from 'openai';
-import * as fs from 'fs';
-import * as path from 'path';
-import * as os from 'os';
+import { ConversationService } from '../conversation/conversation.service';
+import { MessageRole, MessageType } from '../conversation/entities/conversation-message.entity';
+
+export interface VoiceCommandResult {
+  success: boolean;
+  transcription?: string;
+  response?: string;
+  actions?: any[];
+  error?: string;
+  timestamp: string;
+}
+
+export interface ConversationPayload {
+  conversationId?: string;
+  sessionId: string;
+  messages: Array<{
+    role: string;
+    content: string;
+    timestamp?: string;
+  }>;
+  totalMessages?: number;
+  context?: Record<string, any>;
+}
 
 @Injectable()
 export class AIVoiceService {
-  private readonly openai: OpenAI;
   private readonly logger = new Logger(AIVoiceService.name);
+  private readonly openai: OpenAI;
 
-  constructor(private readonly configService: ConfigService) {
-    const apiKey = this.configService.get<string>('OPENAI_API_KEY');
-    if (!apiKey) {
-      this.logger.error('OpenAI API key not found');
-      throw new Error('OpenAI API key not configured');
+  constructor(
+    private readonly conversationService: ConversationService,
+  ) {
+    if (process.env.OPENAI_API_KEY) {
+      this.openai = new OpenAI({
+        apiKey: process.env.OPENAI_API_KEY,
+      });
+      this.logger.log('OpenAI client initialized');
+    } else {
+      this.logger.warn('OpenAI API key not found - voice features will be limited');
     }
-
-    this.openai = new OpenAI({
-      apiKey: apiKey,
-    });
-    
-    this.logger.log('AI Voice Service initialized');
   }
 
-  async processVoiceCommand(audioBuffer: Buffer): Promise<any> {
-    this.logger.log('Processing voice command...');
+  // Process voice command with memory
+  async processVoiceCommand(
+    audioBuffer: Buffer,
+    conversationPayload?: ConversationPayload,
+    userId: string = 'default-user'
+  ): Promise<VoiceCommandResult> {
+    const timestamp = new Date().toISOString();
     
     try {
-      const transcription = await this.transcribeAudio(audioBuffer);
-      this.logger.log(`Transcription: "${transcription}"`);
+      if (!this.openai) {
+        throw new Error('OpenAI not configured');
+      }
 
-      const aiResult = await this.processMessage(transcription);
-      this.logger.log(`AI Response: "${aiResult.response}"`);
+      this.logger.log(`Processing voice command for user: ${userId}`);
+
+      // Step 1: Transcribe audio
+      const transcription = await this.transcribeAudio(audioBuffer);
+      this.logger.log(`Transcription: ${transcription}`);
+
+      if (!transcription) {
+        throw new Error('No transcription received');
+      }
+
+      // Step 2: Get or create conversation context
+      let sessionId = conversationPayload?.sessionId;
+      if (!sessionId) {
+        sessionId = `voice_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      }
+
+      // Step 3: Add user message to conversation
+      await this.conversationService.addMessage({
+        sessionId,
+        userId,
+        role: MessageRole.USER,
+        content: transcription,
+        messageType: MessageType.VOICE,
+        metadata: {
+          audioLength: audioBuffer.length,
+          processingTime: Date.now()
+        }
+      });
+
+      // Step 4: Get conversation context for AI
+      const context = await this.conversationService.getConversationContext(sessionId, 10);
+
+      // Step 5: Generate AI response with memory
+      const aiResponse = await this.generateResponseWithMemory(transcription, context);
+
+      // Step 6: Add AI response to conversation
+      await this.conversationService.addMessage({
+        sessionId,
+        userId,
+        role: MessageRole.ASSISTANT,
+        content: aiResponse,
+        messageType: MessageType.TEXT,
+        metadata: {
+          originalTranscription: transcription,
+          responseGeneratedAt: timestamp
+        }
+      });
 
       return {
         success: true,
         transcription,
-        response: aiResult.response,
-        timestamp: new Date().toISOString(),
+        response: aiResponse,
+        actions: [], // You can add action processing here
+        timestamp
       };
 
     } catch (error) {
-      this.logger.error('Voice processing failed:', error);
-      
+      this.logger.error('Voice command processing failed:', error);
       return {
         success: false,
         error: error.message,
-        transcription: '',
-        response: 'Sorry, I encountered an error processing your voice command.',
-        timestamp: new Date().toISOString(),
+        timestamp
       };
     }
   }
 
-  async transcribeAudio(audioBuffer: Buffer): Promise<string> {
-    if (!audioBuffer || audioBuffer.length === 0) {
-      throw new Error('No audio data provided');
-    }
-
-    this.logger.log(`Audio buffer size: ${audioBuffer.length} bytes`);
-
-    const tempDir = os.tmpdir();
-    const tempPath = path.join(tempDir, `voice_${Date.now()}.mp3`);
+  // Process text command with memory
+  async processTextCommand(
+    message: string,
+    conversationPayload?: ConversationPayload,
+    userId: string = 'default-user'
+  ): Promise<VoiceCommandResult> {
+    const timestamp = new Date().toISOString();
 
     try {
-      fs.writeFileSync(tempPath, audioBuffer);
-      
-      const stats = fs.statSync(tempPath);
-      this.logger.log(`Temp file created: ${stats.size} bytes`);
+      this.logger.log(`Processing text command for user: ${userId}: ${message}`);
 
-      const transcription = await this.openai.audio.transcriptions.create({
-        file: fs.createReadStream(tempPath),
-        model: 'whisper-1',
-        language: 'en',
-        response_format: 'json',
-        temperature: 0.0,
-      });
-
-      this.logger.log(`Transcription successful: "${transcription.text}"`);
-      return transcription.text;
-
-    } catch (error) {
-      this.logger.error('Transcription error:', error);
-      throw new Error(`Audio transcription failed: ${error.message}`);
-    } finally {
-      try {
-        if (fs.existsSync(tempPath)) {
-          fs.unlinkSync(tempPath);
-          this.logger.log('Cleaned up temp file');
-        }
-      } catch (cleanupError) {
-        this.logger.warn('Failed to cleanup temp file:', cleanupError);
+      // Step 1: Get or create conversation context
+      let sessionId = conversationPayload?.sessionId;
+      if (!sessionId) {
+        sessionId = `text_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       }
-    }
-  }
 
-  async processMessage(message: string): Promise<any> {
-    try {
-      const completion = await this.openai.chat.completions.create({
-        model: 'gpt-3.5-turbo',
-        messages: [
-          {
-            role: 'system',
-            content: `You are an AI assistant for a construction company. 
-            Help with scheduling, communication, task management, and general construction questions.
-            Be concise, practical, and friendly in your responses.`
-          },
-          {
-            role: 'user',
-            content: message
-          }
-        ],
-        temperature: 0.7,
-        max_tokens: 500,
+      // Step 2: Add user message to conversation
+      await this.conversationService.addMessage({
+        sessionId,
+        userId,
+        role: MessageRole.USER,
+        content: message,
+        messageType: MessageType.TEXT,
+        metadata: {
+          source: 'text_input'
+        }
       });
 
-      const response = completion.choices[0].message.content;
+      // Step 3: Get conversation context for AI
+      const context = await this.conversationService.getConversationContext(sessionId, 10);
+
+      // Step 4: Generate AI response with memory
+      const aiResponse = await this.generateResponseWithMemory(message, context);
+
+      // Step 5: Add AI response to conversation
+      await this.conversationService.addMessage({
+        sessionId,
+        userId,
+        role: MessageRole.ASSISTANT,
+        content: aiResponse,
+        messageType: MessageType.TEXT,
+        metadata: {
+          originalMessage: message,
+          responseGeneratedAt: timestamp
+        }
+      });
 
       return {
-        response,
-        usage: completion.usage
+        success: true,
+        transcription: message,
+        response: aiResponse,
+        actions: [], // You can add action processing here
+        timestamp
       };
 
     } catch (error) {
-      this.logger.error('AI processing error:', error);
-      throw new Error(`AI processing failed: ${error.message}`);
+      this.logger.error('Text command processing failed:', error);
+      return {
+        success: false,
+        error: error.message,
+        timestamp
+      };
     }
+  }
+
+  // Generate AI response with conversation memory
+  private async generateResponseWithMemory(
+    currentMessage: string,
+    context: ConversationPayload
+  ): Promise<string> {
+    if (!this.openai) {
+      return "I'm sorry, but AI processing is not available right now.";
+    }
+
+    try {
+      // Build conversation history for OpenAI
+      const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
+        {
+          role: 'system',
+          content: `You are Atom, a helpful AI construction assistant. You help with:
+          - Project management and scheduling
+          - Task creation and tracking  
+          - Email drafting and communication
+          - Calendar management
+          - Document organization
+          - Voice commands and automation
+          
+          Remember the conversation history and maintain context. Be conversational and helpful.
+          
+          Current conversation context: ${JSON.stringify(context.context || {})}
+          Total messages in conversation: ${context.totalMessages || 0}`
+        }
+      ];
+
+      // Add conversation history
+      if (context.messages && context.messages.length > 0) {
+        context.messages.forEach(msg => {
+          messages.push({
+            role: msg.role as 'user' | 'assistant',
+            content: msg.content
+          });
+        });
+      }
+
+      // Add current message if not already in history
+      const lastMessage = context.messages?.[context.messages.length - 1];
+      if (!lastMessage || lastMessage.content !== currentMessage) {
+        messages.push({
+          role: 'user',
+          content: currentMessage
+        });
+      }
+
+      this.logger.log(`Sending ${messages.length} messages to OpenAI`);
+
+      const completion = await this.openai.chat.completions.create({
+        model: 'gpt-3.5-turbo',
+        messages,
+        max_tokens: 500,
+        temperature: 0.7,
+      });
+
+      const response = completion.choices[0]?.message?.content || 
+        "I'm sorry, I couldn't generate a response right now.";
+
+      this.logger.log(`AI Response: ${response}`);
+      return response;
+
+    } catch (error) {
+      this.logger.error('OpenAI API error:', error);
+      return "I'm sorry, I encountered an error while processing your request.";
+    }
+  }
+
+  // Transcribe audio using OpenAI Whisper
+  private async transcribeAudio(audioBuffer: Buffer): Promise<string> {
+    if (!this.openai) {
+      throw new Error('OpenAI not configured for transcription');
+    }
+
+    try {
+      this.logger.log(`Transcribing audio buffer of size: ${audioBuffer.length}`);
+
+      // Create a file-like object for OpenAI
+      const file = new File([audioBuffer], 'audio.mp4', { type: 'audio/mp4' });
+
+      const transcription = await this.openai.audio.transcriptions.create({
+        file,
+        model: 'whisper-1',
+        language: 'en',
+      });
+
+      return transcription.text || '';
+    } catch (error) {
+      this.logger.error('Transcription failed:', error);
+      throw new Error(`Transcription failed: ${error.message}`);
+    }
+  }
+
+  // Legacy method for backward compatibility
+  async processMessage(message: string): Promise<{ response: string }> {
+    const result = await this.processTextCommand(message);
+    return { response: result.response || result.error || 'No response generated' };
   }
 }
