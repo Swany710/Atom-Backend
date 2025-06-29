@@ -50,21 +50,50 @@ let AppController = class AppController {
             timestamp: new Date().toISOString()
         };
     }
-    postAIText(body) {
-        console.log('AI Text endpoint called with:', body);
+    postAITextCommand1(body) {
+        console.log('AI Text Command1 endpoint called with:', body);
+        const constructionResponses = [
+            "Hello! I'm Atom, your AI construction assistant. I can help with project planning, material estimates, safety protocols, and construction management. What specific aspect of your project would you like assistance with?",
+            "Great to hear from you! As your construction AI, I can provide guidance on building codes, project scheduling, cost estimation, and safety compliance. Tell me about your current construction challenge.",
+            "Hi there! I'm here to help with your construction needs - whether it's structural planning, material selection, permit requirements, or project management. What construction topic can I assist you with today?",
+            "Welcome! I specialize in construction assistance including foundation work, framing, electrical planning, plumbing layout, and project coordination. How can I help make your construction project successful?"
+        ];
+        const randomResponse = constructionResponses[Math.floor(Math.random() * constructionResponses.length)];
         return {
-            message: 'Hello! This is a simple test response from Atom AI.',
-            input: body,
-            timestamp: new Date().toISOString()
+            message: randomResponse,
+            conversationId: `text-${Date.now()}`,
+            timestamp: new Date().toISOString(),
+            mode: 'demo'
         };
     }
-    postAIVoice(body) {
-        console.log('AI Voice endpoint called!');
+    postAIVoiceCommand1(body) {
+        console.log('AI Voice Command1 endpoint called!');
+        const voiceResponses = [
+            "I received your voice message! While I'm in demo mode, I'm ready to help with construction planning, safety guidelines, and project management.",
+            "Voice command processed! I can assist with building permits, material calculations, construction scheduling, and safety protocols.",
+            "Got your audio! I'm here to help with construction challenges like structural design, cost estimation, and project coordination.",
+            "Voice message received! Let me know how I can help with your construction project - planning, materials, safety, or technical guidance."
+        ];
+        const randomResponse = voiceResponses[Math.floor(Math.random() * voiceResponses.length)];
         return {
-            message: 'Voice endpoint working in demo mode!',
-            transcription: '[Demo] Hello Atom',
-            timestamp: new Date().toISOString()
+            message: randomResponse,
+            transcription: '[Demo Mode] Hello Atom, can you help with my construction project?',
+            conversationId: `voice-${Date.now()}`,
+            timestamp: new Date().toISOString(),
+            mode: 'demo'
         };
+    }
+    postAITextCommand(body) {
+        return this.postAITextCommand1(body);
+    }
+    postAIVoiceCommand(body) {
+        return this.postAIVoiceCommand1(body);
+    }
+    postAIText(body) {
+        return this.postAITextCommand1(body);
+    }
+    postAIVoice(body) {
+        return this.postAIVoiceCommand1(body);
     }
 };
 exports.AppController = AppController;
@@ -98,6 +127,34 @@ __decorate([
     __metadata("design:paramtypes", []),
     __metadata("design:returntype", void 0)
 ], AppController.prototype, "getAIStatus", null);
+__decorate([
+    (0, common_1.Post)('ai/text-command1'),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", void 0)
+], AppController.prototype, "postAITextCommand1", null);
+__decorate([
+    (0, common_1.Post)('ai/voice-command1'),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", void 0)
+], AppController.prototype, "postAIVoiceCommand1", null);
+__decorate([
+    (0, common_1.Post)('ai/text-command'),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", void 0)
+], AppController.prototype, "postAITextCommand", null);
+__decorate([
+    (0, common_1.Post)('ai/voice-command'),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", void 0)
+], AppController.prototype, "postAIVoiceCommand", null);
 __decorate([
     (0, common_1.Post)('ai/text'),
     __param(0, (0, common_1.Body)()),

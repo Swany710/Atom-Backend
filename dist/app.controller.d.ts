@@ -21,14 +21,43 @@ export declare class AppController {
         message: string;
         timestamp: string;
     };
+    postAITextCommand1(body: any): {
+        message: string;
+        conversationId: string;
+        timestamp: string;
+        mode: string;
+    };
+    postAIVoiceCommand1(body: any): {
+        message: string;
+        transcription: string;
+        conversationId: string;
+        timestamp: string;
+        mode: string;
+    };
+    postAITextCommand(body: any): {
+        message: string;
+        conversationId: string;
+        timestamp: string;
+        mode: string;
+    };
+    postAIVoiceCommand(body: any): {
+        message: string;
+        transcription: string;
+        conversationId: string;
+        timestamp: string;
+        mode: string;
+    };
     postAIText(body: any): {
         message: string;
-        input: any;
+        conversationId: string;
         timestamp: string;
+        mode: string;
     };
     postAIVoice(body: any): {
         message: string;
         transcription: string;
+        conversationId: string;
         timestamp: string;
+        mode: string;
     };
 }
