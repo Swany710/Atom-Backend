@@ -1,4 +1,4 @@
-// src/ai/ai-voice.service.ts - UPDATED WITH MEMORY
+// src/ai/ai-voice.service.ts - FULL RAILWAY VERSION WITH MEMORY
 import { Injectable, Logger } from '@nestjs/common';
 import OpenAI from 'openai';
 import { ConversationService } from '../conversation/conversation.service';
@@ -37,13 +37,13 @@ export class AIVoiceService {
       this.openai = new OpenAI({
         apiKey: process.env.OPENAI_API_KEY,
       });
-      this.logger.log('OpenAI client initialized');
+      this.logger.log('OpenAI client initialized for Railway deployment');
     } else {
       this.logger.warn('OpenAI API key not found - voice features will be limited');
     }
   }
 
-  // Process voice command with memory
+  // Process voice command with Railway PostgreSQL memory
   async processVoiceCommand(
     audioBuffer: Buffer,
     conversationPayload?: ConversationPayload,
@@ -56,7 +56,7 @@ export class AIVoiceService {
         throw new Error('OpenAI not configured');
       }
 
-      this.logger.log(`Processing voice command for user: ${userId}`);
+      this.logger.log(`Processing voice command for user: ${userId} on Railway`);
 
       // Step 1: Transcribe audio
       const transcription = await this.transcribeAudio(audioBuffer);
@@ -72,7 +72,7 @@ export class AIVoiceService {
         sessionId = `voice_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       }
 
-      // Step 3: Add user message to conversation
+      // Step 3: Add user message to Railway PostgreSQL
       await this.conversationService.addMessage({
         sessionId,
         userId,
@@ -81,7 +81,8 @@ export class AIVoiceService {
         messageType: MessageType.VOICE,
         metadata: {
           audioLength: audioBuffer.length,
-          processingTime: Date.now()
+          processingTime: Date.now(),
+          platform: 'railway'
         }
       });
 
@@ -91,7 +92,7 @@ export class AIVoiceService {
       // Step 5: Generate AI response with memory
       const aiResponse = await this.generateResponseWithMemory(transcription, context);
 
-      // Step 6: Add AI response to conversation
+      // Step 6: Add AI response to Railway PostgreSQL
       await this.conversationService.addMessage({
         sessionId,
         userId,
@@ -100,9 +101,12 @@ export class AIVoiceService {
         messageType: MessageType.TEXT,
         metadata: {
           originalTranscription: transcription,
-          responseGeneratedAt: timestamp
+          responseGeneratedAt: timestamp,
+          platform: 'railway'
         }
       });
+
+      this.logger.log('Voice command processed successfully with Railway PostgreSQL memory');
 
       return {
         success: true,
@@ -122,7 +126,7 @@ export class AIVoiceService {
     }
   }
 
-  // Process text command with memory
+  // Process text command with Railway PostgreSQL memory
   async processTextCommand(
     message: string,
     conversationPayload?: ConversationPayload,
@@ -131,7 +135,7 @@ export class AIVoiceService {
     const timestamp = new Date().toISOString();
 
     try {
-      this.logger.log(`Processing text command for user: ${userId}: ${message}`);
+      this.logger.log(`Processing text command for user: ${userId} on Railway: ${message}`);
 
       // Step 1: Get or create conversation context
       let sessionId = conversationPayload?.sessionId;
@@ -139,7 +143,7 @@ export class AIVoiceService {
         sessionId = `text_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       }
 
-      // Step 2: Add user message to conversation
+      // Step 2: Add user message to Railway PostgreSQL
       await this.conversationService.addMessage({
         sessionId,
         userId,
@@ -147,7 +151,8 @@ export class AIVoiceService {
         content: message,
         messageType: MessageType.TEXT,
         metadata: {
-          source: 'text_input'
+          source: 'text_input',
+          platform: 'railway'
         }
       });
 
@@ -157,7 +162,7 @@ export class AIVoiceService {
       // Step 4: Generate AI response with memory
       const aiResponse = await this.generateResponseWithMemory(message, context);
 
-      // Step 5: Add AI response to conversation
+      // Step 5: Add AI response to Railway PostgreSQL
       await this.conversationService.addMessage({
         sessionId,
         userId,
@@ -166,9 +171,12 @@ export class AIVoiceService {
         messageType: MessageType.TEXT,
         metadata: {
           originalMessage: message,
-          responseGeneratedAt: timestamp
+          responseGeneratedAt: timestamp,
+          platform: 'railway'
         }
       });
+
+      this.logger.log('Text command processed successfully with Railway PostgreSQL memory');
 
       return {
         success: true,
@@ -188,7 +196,7 @@ export class AIVoiceService {
     }
   }
 
-  // Generate AI response with conversation memory
+  // Generate AI response with conversation memory from Railway PostgreSQL
   private async generateResponseWithMemory(
     currentMessage: string,
     context: ConversationPayload
@@ -202,7 +210,7 @@ export class AIVoiceService {
       const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
         {
           role: 'system',
-          content: `You are Atom, a helpful AI construction assistant. You help with:
+          content: `You are Atom, a helpful AI construction assistant running on Railway with persistent memory. You help with:
           - Project management and scheduling
           - Task creation and tracking  
           - Email drafting and communication
@@ -210,14 +218,16 @@ export class AIVoiceService {
           - Document organization
           - Voice commands and automation
           
-          Remember the conversation history and maintain context. Be conversational and helpful.
+          You have access to conversation history stored in Railway PostgreSQL. Remember previous conversations and maintain context.
+          Be conversational, helpful, and remember what the user has told you before.
           
           Current conversation context: ${JSON.stringify(context.context || {})}
-          Total messages in conversation: ${context.totalMessages || 0}`
+          Total messages in conversation: ${context.totalMessages || 0}
+          Database: Railway PostgreSQL`
         }
       ];
 
-      // Add conversation history
+      // Add conversation history from Railway PostgreSQL
       if (context.messages && context.messages.length > 0) {
         context.messages.forEach(msg => {
           messages.push({
@@ -236,7 +246,7 @@ export class AIVoiceService {
         });
       }
 
-      this.logger.log(`Sending ${messages.length} messages to OpenAI`);
+      this.logger.log(`Sending ${messages.length} messages to OpenAI (Railway deployment)`);
 
       const completion = await this.openai.chat.completions.create({
         model: 'gpt-3.5-turbo',
@@ -248,7 +258,7 @@ export class AIVoiceService {
       const response = completion.choices[0]?.message?.content || 
         "I'm sorry, I couldn't generate a response right now.";
 
-      this.logger.log(`AI Response: ${response}`);
+      this.logger.log(`AI Response generated successfully: ${response.substring(0, 100)}...`);
       return response;
 
     } catch (error) {
@@ -264,7 +274,7 @@ export class AIVoiceService {
     }
 
     try {
-      this.logger.log(`Transcribing audio buffer of size: ${audioBuffer.length}`);
+      this.logger.log(`Transcribing audio buffer of size: ${audioBuffer.length} on Railway`);
 
       // Create a file-like object for OpenAI
       const file = new File([audioBuffer], 'audio.mp4', { type: 'audio/mp4' });

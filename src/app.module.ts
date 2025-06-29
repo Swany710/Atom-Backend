@@ -1,4 +1,4 @@
-// src/app.module.ts - RAILWAY PRODUCTION FIX
+// src/app.module.ts - RAILWAY POSTGRESQL VERSION
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -12,7 +12,7 @@ import { AIVoiceModule } from './ai/ai-voice.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
-// Import entities
+// Import entities for proper TypeORM configuration
 import { Conversation } from './conversation/entities/conversation.entity';
 import { ConversationMessage } from './conversation/entities/conversation-message.entity';
 import { UserConversationSettings } from './conversation/entities/user-conversation-settings.entity';
@@ -25,12 +25,17 @@ import { UserConversationSettings } from './conversation/entities/user-conversat
       envFilePath: ['.env.local', '.env'],
     }),
 
-    // Database connection with Railway/Supabase fixes
+    // Database connection to Railway PostgreSQL
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => {
-        const databaseUrl = configService.get('SUPABASE_DATABASE_URL') || configService.get('DATABASE_URL');
+        // Railway automatically provides DATABASE_URL for PostgreSQL
+        const databaseUrl = configService.get('DATABASE_URL');
         
+        if (!databaseUrl) {
+          throw new Error('DATABASE_URL not found. Make sure PostgreSQL is added to your Railway project.');
+        }
+
         return {
           type: 'postgres',
           url: databaseUrl,
@@ -42,26 +47,26 @@ import { UserConversationSettings } from './conversation/entities/user-conversat
             UserConversationSettings,
           ],
           
-          // Production settings for Railway
-          synchronize: configService.get('NODE_ENV') !== 'production',
+          // Railway PostgreSQL settings
+          synchronize: configService.get('NODE_ENV') !== 'production', // Auto-create tables in dev
           logging: configService.get('NODE_ENV') === 'development',
           
-          // SSL configuration for Supabase
-          ssl: {
+          // SSL configuration for Railway PostgreSQL
+          ssl: configService.get('NODE_ENV') === 'production' ? {
             rejectUnauthorized: false
-          },
+          } : false,
           
-          // Railway-specific connection settings
+          // Connection pool settings optimized for Railway
           extra: {
-            max: 10,
-            min: 1,
+            max: 10, // Maximum number of connections
+            min: 1,  // Minimum number of connections
             idleTimeoutMillis: 30000,
-            connectionTimeoutMillis: 10000, // Increased timeout
-            // Force IPv4
-            family: 4,
-            // Additional Railway fixes
-            keepAlive: true,
-            keepAliveInitialDelayMillis: 0,
+            connectionTimeoutMillis: 5000,
+            acquireTimeoutMillis: 60000,
+            createTimeoutMillis: 30000,
+            destroyTimeoutMillis: 5000,
+            reapIntervalMillis: 1000,
+            createRetryIntervalMillis: 200,
           },
           
           // Retry configuration
@@ -75,9 +80,9 @@ import { UserConversationSettings } from './conversation/entities/user-conversat
     ScheduleModule.forRoot(),
     EventEmitterModule.forRoot(),
 
-    // Your application modules
-    ConversationModule,
-    AIVoiceModule,
+    // Your application modules with full memory system
+    ConversationModule, // Full conversation memory
+    AIVoiceModule, // AI voice processing with memory
   ],
   controllers: [AppController],
   providers: [AppService],
