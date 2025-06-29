@@ -9,16 +9,10 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.AppModule = void 0;
 const common_1 = require("@nestjs/common");
 const config_1 = require("@nestjs/config");
-const typeorm_1 = require("@nestjs/typeorm");
-const schedule_1 = require("@nestjs/schedule");
-const event_emitter_1 = require("@nestjs/event-emitter");
-const conversation_module_1 = require("./conversation/conversation.module");
-const ai_voice_module_1 = require("./ai/ai-voice.module");
 const app_controller_1 = require("./app.controller");
 const app_service_1 = require("./app.service");
-const conversation_entity_1 = require("./conversation/entities/conversation.entity");
-const conversation_message_entity_1 = require("./conversation/entities/conversation-message.entity");
-const user_conversation_settings_entity_1 = require("./conversation/entities/user-conversation-settings.entity");
+const voice_controller_1 = require("./voice-transcription/voice.controller");
+const ai_voice_module_1 = require("./ai/ai-voice.module");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -27,45 +21,14 @@ exports.AppModule = AppModule = __decorate([
         imports: [
             config_1.ConfigModule.forRoot({
                 isGlobal: true,
-                envFilePath: ['.env.local', '.env'],
+                envFilePath: ['.env'],
             }),
-            typeorm_1.TypeOrmModule.forRootAsync({
-                inject: [config_1.ConfigService],
-                useFactory: (configService) => {
-                    const databaseUrl = configService.get('SUPABASE_DATABASE_URL') || configService.get('DATABASE_URL');
-                    return {
-                        type: 'postgres',
-                        url: databaseUrl,
-                        entities: [
-                            conversation_entity_1.Conversation,
-                            conversation_message_entity_1.ConversationMessage,
-                            user_conversation_settings_entity_1.UserConversationSettings,
-                        ],
-                        synchronize: configService.get('NODE_ENV') !== 'production',
-                        logging: configService.get('NODE_ENV') === 'development',
-                        ssl: {
-                            rejectUnauthorized: false
-                        },
-                        extra: {
-                            max: 10,
-                            min: 1,
-                            idleTimeoutMillis: 30000,
-                            connectionTimeoutMillis: 10000,
-                            family: 4,
-                            keepAlive: true,
-                            keepAliveInitialDelayMillis: 0,
-                        },
-                        retryAttempts: 3,
-                        retryDelay: 3000,
-                    };
-                },
-            }),
-            schedule_1.ScheduleModule.forRoot(),
-            event_emitter_1.EventEmitterModule.forRoot(),
-            conversation_module_1.ConversationModule,
             ai_voice_module_1.AIVoiceModule,
         ],
-        controllers: [app_controller_1.AppController],
+        controllers: [
+            app_controller_1.AppController,
+            voice_controller_1.N8NVoiceController,
+        ],
         providers: [app_service_1.AppService],
     })
 ], AppModule);
