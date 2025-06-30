@@ -11,51 +11,18 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 var __param = (this && this.__param) || function (paramIndex, decorator) {
     return function (target, key) { decorator(target, key, paramIndex); }
 };
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AppController = void 0;
 const common_1 = require("@nestjs/common");
 const platform_express_1 = require("@nestjs/platform-express");
 const app_service_1 = require("./app.service");
-const openai_1 = __importDefault(require("openai"));
 const config_1 = require("@nestjs/config");
 let AppController = class AppController {
     constructor(appService, configService) {
         this.appService = appService;
         this.configService = configService;
         this.conversations = new Map();
-        this.isOpenAIConfigured = false;
-        this.initializeOpenAI();
-    }
-    async initializeOpenAI() {
-        try {
-            const apiKey = this.configService.get('OPENAI_API_KEY');
-            console.log('🔍 OpenAI Initialization:');
-            console.log('   API Key exists:', !!apiKey);
-            console.log('   API Key length:', apiKey?.length || 0);
-            if (!apiKey) {
-                console.error('❌ OPENAI_API_KEY not found!');
-                this.isOpenAIConfigured = false;
-                return;
-            }
-            this.openai = new openai_1.default({
-                apiKey: apiKey,
-            });
-            console.log('🧪 Testing OpenAI API...');
-            const testCompletion = await this.openai.chat.completions.create({
-                model: 'gpt-3.5-turbo',
-                messages: [{ role: 'user', content: 'Hello' }],
-                max_tokens: 5,
-            });
-            console.log('✅ OpenAI API working!');
-            this.isOpenAIConfigured = true;
-        }
-        catch (error) {
-            console.error('❌ OpenAI setup failed:', error.message);
-            this.isOpenAIConfigured = false;
-        }
+        console.log('✅ Atom Backend Controller initialized');
     }
     getHello() {
         return this.appService.getHello();
@@ -67,54 +34,90 @@ let AppController = class AppController {
         };
     }
     getAIHealth() {
+        const apiKey = this.configService.get('OPENAI_API_KEY');
+        const isConfigured = !!apiKey && apiKey.startsWith('sk-');
         return {
             status: 'ok',
             service: 'Personal AI Assistant',
-            openaiConfigured: this.isOpenAIConfigured,
+            openaiConfigured: isConfigured,
             timestamp: new Date().toISOString()
         };
     }
     getAIStatus() {
+        const apiKey = this.configService.get('OPENAI_API_KEY');
+        const isConfigured = !!apiKey && apiKey.startsWith('sk-');
         return {
-            status: this.isOpenAIConfigured ? 'available' : 'configuration_error',
-            aiService: this.isOpenAIConfigured ? 'online' : 'offline',
-            mode: this.isOpenAIConfigured ? 'openai' : 'error',
+            status: isConfigured ? 'available' : 'configuration_error',
+            aiService: isConfigured ? 'online' : 'offline',
+            mode: isConfigured ? 'openai' : 'error',
             timestamp: new Date().toISOString()
         };
     }
-    async processTextCommand(body) {
-        console.log('📝 Text command received:', body.message);
-        if (!this.isOpenAIConfigured) {
-            return {
-                message: "OpenAI is not configured. Please check the API key and restart the server.",
-                conversationId: `error-${Date.now()}`,
-                timestamp: new Date(),
-                mode: 'error'
-            };
-        }
+    async processTextCommand1(body) {
+        console.log('💬 Frontend text request:', body);
         try {
             if (!body || !body.message) {
                 throw new common_1.BadRequestException('Message is required');
             }
-            const conversationId = body.conversationId || `${body.userId || 'user'}-${Date.now()}`;
-            const conversationHistory = this.conversations.get(conversationId) || [];
-            conversationHistory.push({ role: 'user', content: body.message });
-            const completion = await this.openai.chat.completions.create({
-                model: 'gpt-3.5-turbo',
-                messages: [
-                    {
-                        role: 'system',
-                        content: 'You are Atom, a helpful personal AI assistant. You help with daily tasks, productivity, scheduling, reminders, information lookup, decision-making, planning, and general life assistance. Be friendly, conversational, and genuinely helpful.'
-                    },
-                    ...conversationHistory
-                ],
-                max_tokens: 500,
-                temperature: 0.7,
+            const apiKey = this.configService.get('OPENAI_API_KEY');
+            if (!apiKey || !apiKey.startsWith('sk-')) {
+                return {
+                    message: "Hi! I'm Atom, but I need an OpenAI API key to chat with you. Please configure the OPENAI_API_KEY environment variable.",
+                    conversationId: `error-${Date.now()}`,
+                    timestamp: new Date(),
+                    mode: 'error'
+                };
+            }
+            console.log('🤖 Calling OpenAI GPT...');
+            const response = await fetch('https://api.openai.com/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${apiKey}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    model: 'gpt-3.5-turbo',
+                    messages: [
+                        {
+                            role: 'system',
+                            content: 'You are Atom, a helpful personal AI assistant. You help with daily tasks, productivity, scheduling, reminders, information lookup, decision-making, planning, and general life assistance. Be friendly, conversational, and genuinely helpful. Keep responses concise but informative.'
+                        },
+                        {
+                            role: 'user',
+                            content: body.message
+                        }
+                    ],
+                    max_tokens: 500,
+                    temperature: 0.7,
+                })
             });
-            const aiResponse = completion.choices[0]?.message?.content || 'Sorry, I could not generate a response.';
-            conversationHistory.push({ role: 'assistant', content: aiResponse });
-            this.conversations.set(conversationId, conversationHistory);
-            console.log('✅ Text response generated');
+            if (!response.ok) {
+                console.error('❌ OpenAI API Error:', response.status);
+                if (response.status === 401) {
+                    return {
+                        message: "I'm having authentication issues with OpenAI. Please check that the API key is valid and has sufficient credits.",
+                        conversationId: `error-${Date.now()}`,
+                        timestamp: new Date(),
+                        mode: 'error'
+                    };
+                }
+                if (response.status === 429) {
+                    return {
+                        message: "I'm currently at capacity. Please try again in a moment.",
+                        conversationId: `error-${Date.now()}`,
+                        timestamp: new Date(),
+                        mode: 'error'
+                    };
+                }
+                throw new Error(`OpenAI API error: ${response.status}`);
+            }
+            const data = await response.json();
+            const aiResponse = data.choices[0]?.message?.content || 'Sorry, I could not generate a response.';
+            console.log('✅ GPT Response generated successfully');
+            const conversationId = body.conversationId || `${body.userId || 'user'}-${Date.now()}`;
+            const conversation = this.conversations.get(conversationId) || [];
+            conversation.push({ role: 'user', content: body.message, timestamp: new Date() }, { role: 'assistant', content: aiResponse, timestamp: new Date() });
+            this.conversations.set(conversationId, conversation);
             return {
                 message: aiResponse,
                 conversationId: conversationId,
@@ -125,107 +128,114 @@ let AppController = class AppController {
         catch (error) {
             console.error('❌ Text processing error:', error.message);
             return {
-                message: `Text processing failed: ${error.message}`,
+                message: `I'm experiencing technical difficulties: ${error.message}. Please try again in a moment.`,
                 conversationId: `error-${Date.now()}`,
                 timestamp: new Date(),
-                mode: 'error'
+                mode: 'error',
+                error: error.message
             };
         }
     }
-    async processVoiceCommand(file, body) {
-        console.log('🎤 Voice command received:');
+    async processVoiceCommand1(file, body) {
+        console.log('🎤 Frontend voice request:');
         console.log('   File exists:', !!file);
         console.log('   File size:', file?.size || 'unknown');
         console.log('   File type:', file?.mimetype || 'unknown');
-        console.log('   File buffer length:', file?.buffer?.length || 'no buffer');
-        console.log('   Body:', body);
-        console.log('   OpenAI configured:', this.isOpenAIConfigured);
-        if (!this.isOpenAIConfigured) {
-            console.log('❌ OpenAI not configured for voice');
-            return {
-                message: "OpenAI is not configured for voice processing. Please check the API key.",
-                transcription: '[Configuration Error]',
-                conversationId: `voice-error-${Date.now()}`,
-                timestamp: new Date(),
-                mode: 'error'
-            };
-        }
-        if (!file) {
-            console.log('❌ No audio file received');
-            return {
-                message: "No audio file was received. Please make sure your microphone is working and try again.",
-                transcription: '[No Audio File]',
-                conversationId: `voice-error-${Date.now()}`,
-                timestamp: new Date(),
-                mode: 'error'
-            };
-        }
+        console.log('   Form data:', body);
         try {
-            console.log('🎤 Processing audio with Whisper...');
-            console.log('   Buffer size:', file.buffer.length, 'bytes');
+            if (!file || !file.buffer) {
+                return {
+                    message: "No audio file was received. Please check your microphone permissions and try recording again.",
+                    transcription: '[No Audio File]',
+                    conversationId: `voice-error-${Date.now()}`,
+                    timestamp: new Date(),
+                    mode: 'error'
+                };
+            }
+            const apiKey = this.configService.get('OPENAI_API_KEY');
+            if (!apiKey || !apiKey.startsWith('sk-')) {
+                return {
+                    message: "I can hear you, but I need an OpenAI API key to process voice commands. Please configure the OPENAI_API_KEY environment variable.",
+                    transcription: '[API Key Missing]',
+                    conversationId: `voice-error-${Date.now()}`,
+                    timestamp: new Date(),
+                    mode: 'error'
+                };
+            }
+            console.log('🎤 Transcribing with Whisper...');
             const FormData = require('form-data');
             const form = new FormData();
             form.append('file', file.buffer, {
-                filename: file.originalname || 'audio.wav',
-                contentType: file.mimetype || 'audio/wav'
+                filename: file.originalname || 'audio.webm',
+                contentType: file.mimetype || 'audio/webm'
             });
             form.append('model', 'whisper-1');
-            const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+            const transcriptionResponse = await fetch('https://api.openai.com/v1/audio/transcriptions', {
                 method: 'POST',
                 headers: {
-                    'Authorization': `Bearer ${this.configService.get('OPENAI_API_KEY')}`,
+                    'Authorization': `Bearer ${apiKey}`,
                     ...form.getHeaders()
                 },
                 body: form
             });
-            if (!response.ok) {
-                const errorText = await response.text();
-                console.error('❌ Whisper API error:', response.status, errorText);
-                throw new Error(`Whisper API error: ${response.status} ${errorText}`);
+            if (!transcriptionResponse.ok) {
+                const errorText = await transcriptionResponse.text();
+                console.error('❌ Whisper API error:', transcriptionResponse.status, errorText);
+                return {
+                    message: "I had trouble understanding your voice. Please try speaking clearly or use text instead.",
+                    transcription: '[Transcription Failed]',
+                    conversationId: `voice-error-${Date.now()}`,
+                    timestamp: new Date(),
+                    mode: 'error'
+                };
             }
-            const transcriptionResult = await response.json();
-            const transcribedText = transcriptionResult.text || 'Could not transcribe audio';
-            console.log('✅ Whisper transcription:', transcribedText);
-            const textResult = await this.processTextCommand({
+            const transcriptionData = await transcriptionResponse.json();
+            const transcribedText = transcriptionData.text || 'Could not transcribe audio';
+            console.log('✅ Transcription successful:', transcribedText);
+            const textResult = await this.processTextCommand1({
                 message: transcribedText,
-                userId: body.userId || 'voice-user',
-                conversationId: body.conversationId
+                userId: body.userId || 'voice-user'
             });
             return {
                 message: textResult.message,
                 transcription: transcribedText,
                 conversationId: textResult.conversationId,
                 timestamp: new Date(),
-                mode: 'openai'
+                mode: textResult.mode
             };
         }
         catch (error) {
             console.error('❌ Voice processing error:', error);
-            console.error('   Error details:', {
-                message: error.message,
-                stack: error.stack?.split('\n')[0]
-            });
             return {
-                message: `Voice processing failed: ${error.message}. Please try speaking clearly and check your microphone.`,
+                message: `Voice processing failed: ${error.message}. Please try speaking clearly or use text instead.`,
                 transcription: '[Processing Error]',
                 conversationId: `voice-error-${Date.now()}`,
                 timestamp: new Date(),
                 mode: 'error',
-                errorDetails: error.message
+                error: error.message
             };
         }
     }
-    async processTextCommandAlt(body) {
-        return this.processTextCommand(body);
+    getConversation(conversationId) {
+        const conversation = this.conversations.get(conversationId) || [];
+        return {
+            conversationId,
+            messages: conversation,
+            messageCount: conversation.length,
+            timestamp: new Date()
+        };
     }
-    async processVoiceCommandAlt(file, body) {
-        return this.processVoiceCommand(file, body);
-    }
-    async processText(body) {
-        return this.processTextCommand(body);
-    }
-    async processVoice(file, body) {
-        return this.processVoiceCommand(file, body);
+    clearConversation(body) {
+        if (body.conversationId) {
+            this.conversations.delete(body.conversationId);
+        }
+        else {
+            this.conversations.clear();
+        }
+        return {
+            message: 'Conversation cleared',
+            timestamp: new Date()
+        };
     }
 };
 exports.AppController = AppController;
@@ -259,7 +269,7 @@ __decorate([
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [Object]),
     __metadata("design:returntype", Promise)
-], AppController.prototype, "processTextCommand", null);
+], AppController.prototype, "processTextCommand1", null);
 __decorate([
     (0, common_1.Post)('ai/voice-command1'),
     (0, common_1.UseInterceptors)((0, platform_express_1.FileInterceptor)('audio')),
@@ -268,39 +278,21 @@ __decorate([
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [Object, Object]),
     __metadata("design:returntype", Promise)
-], AppController.prototype, "processVoiceCommand", null);
+], AppController.prototype, "processVoiceCommand1", null);
 __decorate([
-    (0, common_1.Post)('ai/text-command'),
+    (0, common_1.Get)('ai/conversation/:conversationId'),
+    __param(0, (0, common_1.Body)('conversationId')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", void 0)
+], AppController.prototype, "getConversation", null);
+__decorate([
+    (0, common_1.Post)('ai/conversation/clear'),
     __param(0, (0, common_1.Body)()),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [Object]),
-    __metadata("design:returntype", Promise)
-], AppController.prototype, "processTextCommandAlt", null);
-__decorate([
-    (0, common_1.Post)('ai/voice-command'),
-    (0, common_1.UseInterceptors)((0, platform_express_1.FileInterceptor)('audio')),
-    __param(0, (0, common_1.UploadedFile)()),
-    __param(1, (0, common_1.Body)()),
-    __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object, Object]),
-    __metadata("design:returntype", Promise)
-], AppController.prototype, "processVoiceCommandAlt", null);
-__decorate([
-    (0, common_1.Post)('ai/text'),
-    __param(0, (0, common_1.Body)()),
-    __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object]),
-    __metadata("design:returntype", Promise)
-], AppController.prototype, "processText", null);
-__decorate([
-    (0, common_1.Post)('ai/voice'),
-    (0, common_1.UseInterceptors)((0, platform_express_1.FileInterceptor)('audio')),
-    __param(0, (0, common_1.UploadedFile)()),
-    __param(1, (0, common_1.Body)()),
-    __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object, Object]),
-    __metadata("design:returntype", Promise)
-], AppController.prototype, "processVoice", null);
+    __metadata("design:returntype", void 0)
+], AppController.prototype, "clearConversation", null);
 exports.AppController = AppController = __decorate([
     (0, common_1.Controller)(),
     __metadata("design:paramtypes", [app_service_1.AppService,

@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
@@ -11,10 +11,10 @@ import { AppService } from './app.service';
     }),
   ],
   controllers: [AppController],
-  providers: [AppService, ConfigService], // Add ConfigService to providers
+  providers: [AppService],
 })
 export class AppModule {
   constructor() {
-    console.log('✅ App Module with real OpenAI personal assistant integration loaded');
+    console.log('✅ Atom App Module loaded - Ready for frontend connection');
   }
 }

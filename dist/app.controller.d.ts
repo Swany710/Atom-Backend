@@ -8,11 +8,8 @@ interface TextCommandRequest {
 export declare class AppController {
     private readonly appService;
     private readonly configService;
-    private openai;
     private conversations;
-    private isOpenAIConfigured;
     constructor(appService: AppService, configService: ConfigService);
-    private initializeOpenAI;
     getHello(): string;
     getHealth(): {
         status: string;
@@ -21,7 +18,7 @@ export declare class AppController {
     getAIHealth(): {
         status: string;
         service: string;
-        openaiConfigured: boolean;
+        openaiConfigured: any;
         timestamp: string;
     };
     getAIStatus(): {
@@ -30,68 +27,45 @@ export declare class AppController {
         mode: string;
         timestamp: string;
     };
-    processTextCommand(body: TextCommandRequest): Promise<{
+    processTextCommand1(body: TextCommandRequest): Promise<{
+        message: any;
+        conversationId: string;
+        timestamp: Date;
+        mode: string;
+        error?: undefined;
+    } | {
         message: string;
         conversationId: string;
         timestamp: Date;
         mode: string;
+        error: any;
     }>;
-    processVoiceCommand(file: any, body: any): Promise<{
-        message: string;
+    processVoiceCommand1(file: any, body: any): Promise<{
+        message: any;
         transcription: any;
         conversationId: string;
         timestamp: Date;
         mode: string;
-        errorDetails?: undefined;
+        error?: undefined;
     } | {
         message: string;
         transcription: string;
         conversationId: string;
         timestamp: Date;
         mode: string;
-        errorDetails: any;
+        error: any;
     }>;
-    processTextCommandAlt(body: TextCommandRequest): Promise<{
-        message: string;
+    getConversation(conversationId: string): {
         conversationId: string;
+        messages: any[];
+        messageCount: number;
         timestamp: Date;
-        mode: string;
-    }>;
-    processVoiceCommandAlt(file: any, body: any): Promise<{
+    };
+    clearConversation(body: {
+        conversationId?: string;
+    }): {
         message: string;
-        transcription: any;
-        conversationId: string;
         timestamp: Date;
-        mode: string;
-        errorDetails?: undefined;
-    } | {
-        message: string;
-        transcription: string;
-        conversationId: string;
-        timestamp: Date;
-        mode: string;
-        errorDetails: any;
-    }>;
-    processText(body: TextCommandRequest): Promise<{
-        message: string;
-        conversationId: string;
-        timestamp: Date;
-        mode: string;
-    }>;
-    processVoice(file: any, body: any): Promise<{
-        message: string;
-        transcription: any;
-        conversationId: string;
-        timestamp: Date;
-        mode: string;
-        errorDetails?: undefined;
-    } | {
-        message: string;
-        transcription: string;
-        conversationId: string;
-        timestamp: Date;
-        mode: string;
-        errorDetails: any;
-    }>;
+    };
 }
 export {};
