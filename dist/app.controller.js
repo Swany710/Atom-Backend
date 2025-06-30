@@ -54,7 +54,7 @@ let AppController = class AppController {
         };
     }
     async processTextCommand1(body) {
-        console.log('💬 Frontend text request:', body);
+        console.log('💬 Text request:', body.message?.substring(0, 50));
         try {
             if (!body || !body.message) {
                 throw new common_1.BadRequestException('Message is required');
@@ -62,7 +62,7 @@ let AppController = class AppController {
             const apiKey = this.configService.get('OPENAI_API_KEY');
             if (!apiKey || !apiKey.startsWith('sk-')) {
                 return {
-                    message: "Hi! I'm Atom, but I need an OpenAI API key to chat with you. Please configure the OPENAI_API_KEY environment variable.",
+                    message: "Hi! I'm Atom, but I need an OpenAI API key to chat with you.",
                     conversationId: `error-${Date.now()}`,
                     timestamp: new Date(),
                     mode: 'error'
@@ -80,7 +80,7 @@ let AppController = class AppController {
                     messages: [
                         {
                             role: 'system',
-                            content: 'You are Atom, a helpful personal AI assistant. You help with daily tasks, productivity, scheduling, reminders, information lookup, decision-making, planning, and general life assistance. Be friendly, conversational, and genuinely helpful. Keep responses concise but informative.'
+                            content: 'You are Atom, a helpful personal AI assistant. Be friendly, conversational, and genuinely helpful. Keep responses concise but informative.'
                         },
                         {
                             role: 'user',
@@ -95,15 +95,7 @@ let AppController = class AppController {
                 console.error('❌ OpenAI API Error:', response.status);
                 if (response.status === 401) {
                     return {
-                        message: "I'm having authentication issues with OpenAI. Please check that the API key is valid and has sufficient credits.",
-                        conversationId: `error-${Date.now()}`,
-                        timestamp: new Date(),
-                        mode: 'error'
-                    };
-                }
-                if (response.status === 429) {
-                    return {
-                        message: "I'm currently at capacity. Please try again in a moment.",
+                        message: "I'm having authentication issues with OpenAI. Please check the API key.",
                         conversationId: `error-${Date.now()}`,
                         timestamp: new Date(),
                         mode: 'error'
@@ -113,7 +105,7 @@ let AppController = class AppController {
             }
             const data = await response.json();
             const aiResponse = data.choices[0]?.message?.content || 'Sorry, I could not generate a response.';
-            console.log('✅ GPT Response generated successfully');
+            console.log('✅ GPT Response generated');
             const conversationId = body.conversationId || `${body.userId || 'user'}-${Date.now()}`;
             const conversation = this.conversations.get(conversationId) || [];
             conversation.push({ role: 'user', content: body.message, timestamp: new Date() }, { role: 'assistant', content: aiResponse, timestamp: new Date() });
@@ -128,7 +120,7 @@ let AppController = class AppController {
         catch (error) {
             console.error('❌ Text processing error:', error.message);
             return {
-                message: `I'm experiencing technical difficulties: ${error.message}. Please try again in a moment.`,
+                message: `I'm experiencing technical difficulties: ${error.message}`,
                 conversationId: `error-${Date.now()}`,
                 timestamp: new Date(),
                 mode: 'error',
@@ -137,16 +129,16 @@ let AppController = class AppController {
         }
     }
     async processVoiceCommand1(file, body) {
-        console.log('🎤 Frontend voice request:');
+        console.log('🎤 Voice request received');
         console.log('   File exists:', !!file);
-        console.log('   File size:', file?.size || 'unknown');
-        console.log('   File type:', file?.mimetype || 'unknown');
-        console.log('   Form data:', body);
+        console.log('   File size:', file?.size || 'no file');
+        console.log('   File type:', file?.mimetype || 'no type');
         try {
-            if (!file || !file.buffer) {
+            if (!file || !file.buffer || file.size === 0) {
+                console.log('❌ No valid audio file received');
                 return {
-                    message: "No audio file was received. Please check your microphone permissions and try recording again.",
-                    transcription: '[No Audio File]',
+                    message: "I didn't receive any audio. Please check your microphone permissions and try again.",
+                    transcription: '[No Audio]',
                     conversationId: `voice-error-${Date.now()}`,
                     timestamp: new Date(),
                     mode: 'error'
@@ -154,48 +146,84 @@ let AppController = class AppController {
             }
             const apiKey = this.configService.get('OPENAI_API_KEY');
             if (!apiKey || !apiKey.startsWith('sk-')) {
+                console.log('❌ OpenAI API key not configured');
                 return {
-                    message: "I can hear you, but I need an OpenAI API key to process voice commands. Please configure the OPENAI_API_KEY environment variable.",
+                    message: "I can hear you, but I need an OpenAI API key to process voice commands.",
                     transcription: '[API Key Missing]',
                     conversationId: `voice-error-${Date.now()}`,
                     timestamp: new Date(),
                     mode: 'error'
                 };
             }
-            console.log('🎤 Transcribing with Whisper...');
-            const FormData = require('form-data');
-            const form = new FormData();
-            form.append('file', file.buffer, {
-                filename: file.originalname || 'audio.webm',
-                contentType: file.mimetype || 'audio/webm'
-            });
-            form.append('model', 'whisper-1');
-            const transcriptionResponse = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${apiKey}`,
-                    ...form.getHeaders()
-                },
-                body: form
-            });
-            if (!transcriptionResponse.ok) {
-                const errorText = await transcriptionResponse.text();
-                console.error('❌ Whisper API error:', transcriptionResponse.status, errorText);
+            console.log('🎤 Processing audio with Whisper API...');
+            console.log('   Audio size:', file.size, 'bytes');
+            let transcribedText = '';
+            try {
+                const FormData = require('form-data');
+                const form = new FormData();
+                const filename = 'audio.webm';
+                const contentType = file.mimetype || 'audio/webm';
+                form.append('file', file.buffer, {
+                    filename: filename,
+                    contentType: contentType
+                });
+                form.append('model', 'whisper-1');
+                console.log('   Sending to Whisper API...');
+                const transcriptionResponse = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${apiKey}`,
+                        ...form.getHeaders()
+                    },
+                    body: form
+                });
+                console.log('   Whisper response status:', transcriptionResponse.status);
+                if (!transcriptionResponse.ok) {
+                    const errorText = await transcriptionResponse.text();
+                    console.error('❌ Whisper API error:', transcriptionResponse.status, errorText);
+                    if (transcriptionResponse.status === 400) {
+                        throw new Error('Audio format not supported by Whisper');
+                    }
+                    else if (transcriptionResponse.status === 401) {
+                        throw new Error('OpenAI API authentication failed');
+                    }
+                    else if (transcriptionResponse.status === 429) {
+                        throw new Error('OpenAI API rate limit exceeded');
+                    }
+                    else {
+                        throw new Error(`Whisper API error: ${transcriptionResponse.status}`);
+                    }
+                }
+                const transcriptionData = await transcriptionResponse.json();
+                transcribedText = transcriptionData.text?.trim() || '';
+                console.log('✅ Transcription successful:', transcribedText.substring(0, 50));
+            }
+            catch (transcriptionError) {
+                console.error('❌ Transcription failed:', transcriptionError.message);
                 return {
-                    message: "I had trouble understanding your voice. Please try speaking clearly or use text instead.",
+                    message: `I had trouble understanding your voice: ${transcriptionError.message}. Please try speaking clearly or use text instead.`,
                     transcription: '[Transcription Failed]',
                     conversationId: `voice-error-${Date.now()}`,
                     timestamp: new Date(),
                     mode: 'error'
                 };
             }
-            const transcriptionData = await transcriptionResponse.json();
-            const transcribedText = transcriptionData.text || 'Could not transcribe audio';
-            console.log('✅ Transcription successful:', transcribedText);
+            if (!transcribedText || transcribedText.length < 2) {
+                console.log('❌ Empty or very short transcription');
+                return {
+                    message: "I couldn't understand what you said. Please try speaking more clearly.",
+                    transcription: '[Empty Transcription]',
+                    conversationId: `voice-error-${Date.now()}`,
+                    timestamp: new Date(),
+                    mode: 'error'
+                };
+            }
+            console.log('🤖 Processing transcribed text with GPT...');
             const textResult = await this.processTextCommand1({
                 message: transcribedText,
                 userId: body.userId || 'voice-user'
             });
+            console.log('✅ Voice processing complete');
             return {
                 message: textResult.message,
                 transcription: transcribedText,
@@ -205,9 +233,10 @@ let AppController = class AppController {
             };
         }
         catch (error) {
-            console.error('❌ Voice processing error:', error);
+            console.error('❌ Voice processing error:', error.message);
+            console.error('   Stack:', error.stack);
             return {
-                message: `Voice processing failed: ${error.message}. Please try speaking clearly or use text instead.`,
+                message: `Voice processing failed: ${error.message}. Please try text chat instead.`,
                 transcription: '[Processing Error]',
                 conversationId: `voice-error-${Date.now()}`,
                 timestamp: new Date(),

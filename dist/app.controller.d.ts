@@ -42,7 +42,7 @@ export declare class AppController {
     }>;
     processVoiceCommand1(file: any, body: any): Promise<{
         message: any;
-        transcription: any;
+        transcription: string;
         conversationId: string;
         timestamp: Date;
         mode: string;
