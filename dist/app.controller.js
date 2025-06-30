@@ -161,42 +161,75 @@ let AppController = class AppController {
             try {
                 const FormData = require('form-data');
                 const form = new FormData();
-                const filename = 'audio.webm';
-                const contentType = file.mimetype || 'audio/webm';
-                form.append('file', file.buffer, {
-                    filename: filename,
-                    contentType: contentType
+                const audioFilename = `audio_${Date.now()}.webm`;
+                const { Readable } = require('stream');
+                const audioStream = Readable.from(file.buffer);
+                form.append('file', audioStream, {
+                    filename: audioFilename,
+                    contentType: file.mimetype || 'audio/webm',
+                    knownLength: file.buffer.length
                 });
                 form.append('model', 'whisper-1');
-                console.log('   Sending to Whisper API...');
+                form.append('response_format', 'json');
+                console.log('   Sending to Whisper API with proper FormData...');
                 const transcriptionResponse = await fetch('https://api.openai.com/v1/audio/transcriptions', {
                     method: 'POST',
                     headers: {
                         'Authorization': `Bearer ${apiKey}`,
-                        ...form.getHeaders()
+                        ...form.getHeaders(),
+                        'User-Agent': 'Atom-Backend/1.0'
                     },
                     body: form
                 });
                 console.log('   Whisper response status:', transcriptionResponse.status);
+                console.log('   Whisper response headers:', transcriptionResponse.headers.get('content-type'));
                 if (!transcriptionResponse.ok) {
                     const errorText = await transcriptionResponse.text();
-                    console.error('❌ Whisper API error:', transcriptionResponse.status, errorText);
+                    console.error('❌ Whisper API error details:', {
+                        status: transcriptionResponse.status,
+                        statusText: transcriptionResponse.statusText,
+                        error: errorText
+                    });
                     if (transcriptionResponse.status === 400) {
-                        throw new Error('Audio format not supported by Whisper');
+                        console.log('   Trying alternative FormData approach...');
+                        const altForm = new FormData();
+                        altForm.append('file', file.buffer, {
+                            filename: 'audio.wav',
+                            contentType: 'audio/wav',
+                        });
+                        altForm.append('model', 'whisper-1');
+                        const altResponse = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+                            method: 'POST',
+                            headers: {
+                                'Authorization': `Bearer ${apiKey}`,
+                                ...altForm.getHeaders()
+                            },
+                            body: altForm
+                        });
+                        if (altResponse.ok) {
+                            const altData = await altResponse.json();
+                            transcribedText = altData.text?.trim() || '';
+                            console.log('✅ Alternative approach worked:', transcribedText.substring(0, 50));
+                        }
+                        else {
+                            throw new Error(`Audio format not supported by Whisper (tried multiple formats)`);
+                        }
                     }
                     else if (transcriptionResponse.status === 401) {
-                        throw new Error('OpenAI API authentication failed');
+                        throw new Error('OpenAI API authentication failed - check API key');
                     }
                     else if (transcriptionResponse.status === 429) {
-                        throw new Error('OpenAI API rate limit exceeded');
+                        throw new Error('OpenAI API rate limit exceeded - please wait a moment');
                     }
                     else {
-                        throw new Error(`Whisper API error: ${transcriptionResponse.status}`);
+                        throw new Error(`Whisper API error: ${transcriptionResponse.status} - ${errorText}`);
                     }
                 }
-                const transcriptionData = await transcriptionResponse.json();
-                transcribedText = transcriptionData.text?.trim() || '';
-                console.log('✅ Transcription successful:', transcribedText.substring(0, 50));
+                else {
+                    const transcriptionData = await transcriptionResponse.json();
+                    transcribedText = transcriptionData.text?.trim() || '';
+                    console.log('✅ Transcription successful:', transcribedText.substring(0, 50));
+                }
             }
             catch (transcriptionError) {
                 console.error('❌ Transcription failed:', transcriptionError.message);
@@ -209,9 +242,9 @@ let AppController = class AppController {
                 };
             }
             if (!transcribedText || transcribedText.length < 2) {
-                console.log('❌ Empty or very short transcription');
+                console.log('❌ Empty or very short transcription:', transcribedText);
                 return {
-                    message: "I couldn't understand what you said. Please try speaking more clearly.",
+                    message: "I couldn't understand what you said. Please try speaking more clearly or check your microphone.",
                     transcription: '[Empty Transcription]',
                     conversationId: `voice-error-${Date.now()}`,
                     timestamp: new Date(),

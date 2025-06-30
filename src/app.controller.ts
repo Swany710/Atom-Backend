@@ -152,7 +152,7 @@ export class AppController {
     }
   }
 
-  // FIXED Voice processing - More robust error handling
+  // FIXED Voice processing - Proper Whisper API FormData
   @Post('ai/voice-command1')
   @UseInterceptors(FileInterceptor('audio'))
   async processVoiceCommand1(@UploadedFile() file: any, @Body() body: any) {
@@ -190,57 +190,94 @@ export class AppController {
       console.log('🎤 Processing audio with Whisper API...');
       console.log('   Audio size:', file.size, 'bytes');
 
-      // Step 3: Transcribe with better error handling
+      // Step 3: FIXED Whisper API call with proper FormData
       let transcribedText = '';
       
       try {
-        // Use Node.js compatible FormData
+        // Create FormData compatible with OpenAI's expectations
         const FormData = require('form-data');
         const form = new FormData();
         
-        // Ensure we have a valid filename and content type
-        const filename = 'audio.webm';
-        const contentType = file.mimetype || 'audio/webm';
+        // Key fix: Use proper file stream instead of buffer directly
+        const audioFilename = `audio_${Date.now()}.webm`;
         
-        form.append('file', file.buffer, {
-          filename: filename,
-          contentType: contentType
+        // Option 1: Create readable stream from buffer
+        const { Readable } = require('stream');
+        const audioStream = Readable.from(file.buffer);
+        
+        form.append('file', audioStream, {
+          filename: audioFilename,
+          contentType: file.mimetype || 'audio/webm',
+          knownLength: file.buffer.length
         });
         form.append('model', 'whisper-1');
+        form.append('response_format', 'json'); // Explicit format
 
-        console.log('   Sending to Whisper API...');
+        console.log('   Sending to Whisper API with proper FormData...');
         
+        // Enhanced fetch with better headers
         const transcriptionResponse = await fetch('https://api.openai.com/v1/audio/transcriptions', {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${apiKey}`,
-            ...form.getHeaders()
+            ...form.getHeaders(),
+            'User-Agent': 'Atom-Backend/1.0'
           },
           body: form
         });
 
         console.log('   Whisper response status:', transcriptionResponse.status);
+        console.log('   Whisper response headers:', transcriptionResponse.headers.get('content-type'));
 
         if (!transcriptionResponse.ok) {
           const errorText = await transcriptionResponse.text();
-          console.error('❌ Whisper API error:', transcriptionResponse.status, errorText);
+          console.error('❌ Whisper API error details:', {
+            status: transcriptionResponse.status,
+            statusText: transcriptionResponse.statusText,
+            error: errorText
+          });
           
-          // More specific error messages
+          // More specific error messages based on status
           if (transcriptionResponse.status === 400) {
-            throw new Error('Audio format not supported by Whisper');
+            console.log('   Trying alternative FormData approach...');
+            
+            // Alternative approach: Use buffer directly with different options
+            const altForm = new FormData();
+            altForm.append('file', file.buffer, {
+              filename: 'audio.wav', // Try different extension
+              contentType: 'audio/wav',
+            });
+            altForm.append('model', 'whisper-1');
+            
+            const altResponse = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${apiKey}`,
+                ...altForm.getHeaders()
+              },
+              body: altForm
+            });
+            
+            if (altResponse.ok) {
+              const altData = await altResponse.json();
+              transcribedText = altData.text?.trim() || '';
+              console.log('✅ Alternative approach worked:', transcribedText.substring(0, 50));
+            } else {
+              throw new Error(`Audio format not supported by Whisper (tried multiple formats)`);
+            }
           } else if (transcriptionResponse.status === 401) {
-            throw new Error('OpenAI API authentication failed');
+            throw new Error('OpenAI API authentication failed - check API key');
           } else if (transcriptionResponse.status === 429) {
-            throw new Error('OpenAI API rate limit exceeded');
+            throw new Error('OpenAI API rate limit exceeded - please wait a moment');
           } else {
-            throw new Error(`Whisper API error: ${transcriptionResponse.status}`);
+            throw new Error(`Whisper API error: ${transcriptionResponse.status} - ${errorText}`);
           }
+        } else {
+          // Success - parse response
+          const transcriptionData = await transcriptionResponse.json();
+          transcribedText = transcriptionData.text?.trim() || '';
+          console.log('✅ Transcription successful:', transcribedText.substring(0, 50));
         }
-
-        const transcriptionData = await transcriptionResponse.json();
-        transcribedText = transcriptionData.text?.trim() || '';
-        
-        console.log('✅ Transcription successful:', transcribedText.substring(0, 50));
 
       } catch (transcriptionError) {
         console.error('❌ Transcription failed:', transcriptionError.message);
@@ -254,11 +291,11 @@ export class AppController {
         };
       }
 
-      // Step 4: Process transcribed text if we have it
+      // Step 4: Validate transcription
       if (!transcribedText || transcribedText.length < 2) {
-        console.log('❌ Empty or very short transcription');
+        console.log('❌ Empty or very short transcription:', transcribedText);
         return {
-          message: "I couldn't understand what you said. Please try speaking more clearly.",
+          message: "I couldn't understand what you said. Please try speaking more clearly or check your microphone.",
           transcription: '[Empty Transcription]',
           conversationId: `voice-error-${Date.now()}`,
           timestamp: new Date(),
@@ -268,7 +305,7 @@ export class AppController {
 
       console.log('🤖 Processing transcribed text with GPT...');
 
-      // Use our working text processing
+      // Step 5: Process with GPT (reuse working text logic)
       const textResult = await this.processTextCommand1({
         message: transcribedText,
         userId: body.userId || 'voice-user'
