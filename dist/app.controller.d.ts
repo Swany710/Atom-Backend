@@ -28,7 +28,6 @@ export declare class AppController {
         status: string;
         aiService: string;
         mode: string;
-        openaiConfigured: boolean;
         timestamp: string;
     };
     processTextCommand(body: TextCommandRequest): Promise<{
@@ -36,76 +35,63 @@ export declare class AppController {
         conversationId: string;
         timestamp: Date;
         mode: string;
-        openaiConfigured: boolean;
-        error?: undefined;
-    } | {
-        message: string;
-        conversationId: string;
-        timestamp: Date;
-        mode: string;
-        openaiConfigured: true;
-        error: {
-            status: any;
-            message: any;
-        };
     }>;
     processVoiceCommand(file: any, body: any): Promise<{
         message: string;
-        transcription: string;
+        transcription: any;
         conversationId: string;
         timestamp: Date;
         mode: string;
-        openaiConfigured: boolean;
-        error?: undefined;
+        errorDetails?: undefined;
     } | {
         message: string;
         transcription: string;
         conversationId: string;
         timestamp: Date;
         mode: string;
-        openaiConfigured: true;
-        error: {
-            status: any;
-            message: any;
-        };
+        errorDetails: any;
     }>;
     processTextCommandAlt(body: TextCommandRequest): Promise<{
         message: string;
         conversationId: string;
         timestamp: Date;
         mode: string;
-        openaiConfigured: boolean;
-        error?: undefined;
-    } | {
-        message: string;
-        conversationId: string;
-        timestamp: Date;
-        mode: string;
-        openaiConfigured: true;
-        error: {
-            status: any;
-            message: any;
-        };
     }>;
     processVoiceCommandAlt(file: any, body: any): Promise<{
         message: string;
-        transcription: string;
+        transcription: any;
         conversationId: string;
         timestamp: Date;
         mode: string;
-        openaiConfigured: boolean;
-        error?: undefined;
+        errorDetails?: undefined;
     } | {
         message: string;
         transcription: string;
         conversationId: string;
         timestamp: Date;
         mode: string;
-        openaiConfigured: true;
-        error: {
-            status: any;
-            message: any;
-        };
+        errorDetails: any;
+    }>;
+    processText(body: TextCommandRequest): Promise<{
+        message: string;
+        conversationId: string;
+        timestamp: Date;
+        mode: string;
+    }>;
+    processVoice(file: any, body: any): Promise<{
+        message: string;
+        transcription: any;
+        conversationId: string;
+        timestamp: Date;
+        mode: string;
+        errorDetails?: undefined;
+    } | {
+        message: string;
+        transcription: string;
+        conversationId: string;
+        timestamp: Date;
+        mode: string;
+        errorDetails: any;
     }>;
 }
 export {};

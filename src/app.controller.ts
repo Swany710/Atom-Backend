@@ -25,18 +25,14 @@ export class AppController {
 
   private async initializeOpenAI() {
     try {
-      // Check if API key exists
       const apiKey = this.configService.get('OPENAI_API_KEY');
       
-      console.log('🔍 OpenAI Initialization Debug:');
+      console.log('🔍 OpenAI Initialization:');
       console.log('   API Key exists:', !!apiKey);
       console.log('   API Key length:', apiKey?.length || 0);
-      console.log('   API Key starts with sk-:', apiKey?.startsWith('sk-') || false);
-      console.log('   API Key preview:', apiKey ? `${apiKey.substring(0, 20)}...${apiKey.slice(-8)}` : 'NOT FOUND');
       
       if (!apiKey) {
-        console.error('❌ OPENAI_API_KEY not found in environment!');
-        console.error('   Check your .env file and make sure OPENAI_API_KEY is set');
+        console.error('❌ OPENAI_API_KEY not found!');
         this.isOpenAIConfigured = false;
         return;
       }
@@ -45,41 +41,20 @@ export class AppController {
         apiKey: apiKey,
       });
       
-      // Test the API key with a simple request
-      console.log('🧪 Testing OpenAI API key...');
-      
+      // Test the API key
+      console.log('🧪 Testing OpenAI API...');
       const testCompletion = await this.openai.chat.completions.create({
         model: 'gpt-3.5-turbo',
         messages: [{ role: 'user', content: 'Hello' }],
         max_tokens: 5,
       });
       
-      console.log('✅ OpenAI API test successful!');
-      console.log('   Test response:', testCompletion.choices[0]?.message?.content);
+      console.log('✅ OpenAI API working!');
       this.isOpenAIConfigured = true;
       
     } catch (error) {
-      console.error('❌ OpenAI initialization failed:');
-      console.error('   Error type:', error.constructor.name);
-      console.error('   Error status:', error.status || 'No status');
-      console.error('   Error message:', error.message);
-      console.error('   Error details:', error);
-      
+      console.error('❌ OpenAI setup failed:', error.message);
       this.isOpenAIConfigured = false;
-      
-      // Provide specific troubleshooting
-      if (error.status === 401) {
-        console.error('🔧 Fix: Invalid API key (401 Unauthorized)');
-        console.error('   - Your OpenAI API key is invalid or expired');
-        console.error('   - Generate a new API key at https://platform.openai.com/api-keys');
-      } else if (error.status === 429) {
-        console.error('🔧 Fix: Rate limit or quota exceeded (429)');
-        console.error('   - Check your OpenAI usage at https://platform.openai.com/usage');
-        console.error('   - Add payment method if you\'re on free tier');
-      } else if (error.status === 403) {
-        console.error('🔧 Fix: API access forbidden (403)');
-        console.error('   - Your API key might not have the required permissions');
-      }
     }
   }
 
@@ -100,7 +75,7 @@ export class AppController {
   getAIHealth() {
     return { 
       status: 'ok', 
-      service: 'Personal AI Assistant with OpenAI',
+      service: 'Personal AI Assistant',
       openaiConfigured: this.isOpenAIConfigured,
       timestamp: new Date().toISOString()
     };
@@ -112,28 +87,21 @@ export class AppController {
       status: this.isOpenAIConfigured ? 'available' : 'configuration_error',
       aiService: this.isOpenAIConfigured ? 'online' : 'offline',
       mode: this.isOpenAIConfigured ? 'openai' : 'error',
-      openaiConfigured: this.isOpenAIConfigured,
       timestamp: new Date().toISOString()
     };
   }
 
-  // Real AI text processing
+  // Text processing
   @Post('ai/text-command1')
   async processTextCommand(@Body() body: TextCommandRequest) {
-    console.log('📝 Text command received:', { 
-      message: body.message, 
-      userId: body.userId,
-      openaiConfigured: this.isOpenAIConfigured 
-    });
+    console.log('📝 Text command received:', body.message);
 
     if (!this.isOpenAIConfigured) {
-      console.log('⚠️ OpenAI not configured, returning error response');
       return {
-        message: "OpenAI is not properly configured. Please check your API key and try again. I'm designed to be your personal AI assistant once the connection is established.",
-        conversationId: `config-error-${Date.now()}`,
+        message: "OpenAI is not configured. Please check the API key and restart the server.",
+        conversationId: `error-${Date.now()}`,
         timestamp: new Date(),
-        mode: 'configuration_error',
-        openaiConfigured: false
+        mode: 'error'
       };
     }
 
@@ -142,24 +110,17 @@ export class AppController {
         throw new BadRequestException('Message is required');
       }
 
-      console.log('🤖 Processing text with OpenAI:', body.message);
-
-      // Create conversation ID
       const conversationId = body.conversationId || `${body.userId || 'user'}-${Date.now()}`;
-      
-      // Get conversation history
       const conversationHistory = this.conversations.get(conversationId) || [];
       
-      // Add user message
       conversationHistory.push({ role: 'user', content: body.message });
 
-      // Call OpenAI GPT
       const completion = await this.openai.chat.completions.create({
         model: 'gpt-3.5-turbo',
         messages: [
           {
             role: 'system',
-            content: 'You are Atom, a helpful personal AI assistant. You help with daily tasks, productivity, scheduling, reminders, information lookup, decision-making, planning, and general life assistance. Be friendly, conversational, and genuinely helpful. Provide practical advice and support for whatever the user needs help with in their personal or professional life.'
+            content: 'You are Atom, a helpful personal AI assistant. You help with daily tasks, productivity, scheduling, reminders, information lookup, decision-making, planning, and general life assistance. Be friendly, conversational, and genuinely helpful.'
           },
           ...conversationHistory
         ],
@@ -167,88 +128,101 @@ export class AppController {
         temperature: 0.7,
       });
 
-      const aiResponse = completion.choices[0]?.message?.content || 'I apologize, but I could not generate a response.';
-      
-      // Add AI response to history
+      const aiResponse = completion.choices[0]?.message?.content || 'Sorry, I could not generate a response.';
       conversationHistory.push({ role: 'assistant', content: aiResponse });
-      
-      // Store conversation
       this.conversations.set(conversationId, conversationHistory);
 
-      console.log('✅ OpenAI response generated successfully');
+      console.log('✅ Text response generated');
 
       return {
         message: aiResponse,
         conversationId: conversationId,
         timestamp: new Date(),
-        mode: 'openai',
-        openaiConfigured: true
+        mode: 'openai'
       };
 
     } catch (error) {
-      console.error('❌ OpenAI text processing error:', error);
-      console.error('   Error details:', {
-        status: error.status,
-        message: error.message,
-        code: error.code
-      });
-      
-      // Return helpful error response
+      console.error('❌ Text processing error:', error.message);
       return {
-        message: `I'm experiencing technical difficulties with OpenAI: ${error.message}. Please check the API configuration and try again.`,
+        message: `Text processing failed: ${error.message}`,
         conversationId: `error-${Date.now()}`,
         timestamp: new Date(),
-        mode: 'api_error',
-        openaiConfigured: this.isOpenAIConfigured,
-        error: {
-          status: error.status,
-          message: error.message
-        }
+        mode: 'error'
       };
     }
   }
 
-  // Real AI voice processing
+  // Voice processing with enhanced debugging
   @Post('ai/voice-command1')
   @UseInterceptors(FileInterceptor('audio'))
   async processVoiceCommand(@UploadedFile() file: any, @Body() body: any) {
-    console.log('🎤 Voice command received:', { 
-      hasFile: !!file, 
-      userId: body?.userId,
-      openaiConfigured: this.isOpenAIConfigured 
-    });
+    console.log('🎤 Voice command received:');
+    console.log('   File exists:', !!file);
+    console.log('   File size:', file?.size || 'unknown');
+    console.log('   File type:', file?.mimetype || 'unknown');
+    console.log('   File buffer length:', file?.buffer?.length || 'no buffer');
+    console.log('   Body:', body);
+    console.log('   OpenAI configured:', this.isOpenAIConfigured);
 
     if (!this.isOpenAIConfigured) {
+      console.log('❌ OpenAI not configured for voice');
       return {
-        message: "OpenAI is not properly configured for voice processing. Please check your API key configuration.",
+        message: "OpenAI is not configured for voice processing. Please check the API key.",
         transcription: '[Configuration Error]',
-        conversationId: `voice-config-error-${Date.now()}`,
+        conversationId: `voice-error-${Date.now()}`,
         timestamp: new Date(),
-        mode: 'configuration_error',
-        openaiConfigured: false
+        mode: 'error'
+      };
+    }
+
+    if (!file) {
+      console.log('❌ No audio file received');
+      return {
+        message: "No audio file was received. Please make sure your microphone is working and try again.",
+        transcription: '[No Audio File]',
+        conversationId: `voice-error-${Date.now()}`,
+        timestamp: new Date(),
+        mode: 'error'
       };
     }
 
     try {
-      if (!file) {
-        throw new BadRequestException('Audio file is required');
-      }
+      console.log('🎤 Processing audio with Whisper...');
+      console.log('   Buffer size:', file.buffer.length, 'bytes');
 
-      console.log('🎤 Processing voice with OpenAI Whisper');
-
-      // Step 1: Transcribe audio using OpenAI Whisper
-      const audioFile = new File([file.buffer], 'audio.wav', { type: 'audio/wav' });
+      // Create FormData for OpenAI API (Node.js compatible way)
+      const FormData = require('form-data');
+      const form = new FormData();
       
-      const transcription = await this.openai.audio.transcriptions.create({
-        file: audioFile,
-        model: 'whisper-1',
+      // Add the audio buffer to form data
+      form.append('file', file.buffer, {
+        filename: file.originalname || 'audio.wav',
+        contentType: file.mimetype || 'audio/wav'
+      });
+      form.append('model', 'whisper-1');
+
+      // Make direct API call to OpenAI
+      const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.configService.get('OPENAI_API_KEY')}`,
+          ...form.getHeaders()
+        },
+        body: form
       });
 
-      const transcribedText = transcription.text || 'Could not transcribe audio';
-      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('❌ Whisper API error:', response.status, errorText);
+        throw new Error(`Whisper API error: ${response.status} ${errorText}`);
+      }
+
+      const transcriptionResult = await response.json();
+      const transcribedText = transcriptionResult.text || 'Could not transcribe audio';
+
       console.log('✅ Whisper transcription:', transcribedText);
 
-      // Step 2: Process the transcribed text with GPT
+      // Process the transcribed text
       const textResult = await this.processTextCommand({
         message: transcribedText,
         userId: body.userId || 'voice-user',
@@ -260,29 +234,28 @@ export class AppController {
         transcription: transcribedText,
         conversationId: textResult.conversationId,
         timestamp: new Date(),
-        mode: 'openai',
-        openaiConfigured: true
+        mode: 'openai'
       };
 
     } catch (error) {
-      console.error('❌ OpenAI voice processing error:', error);
+      console.error('❌ Voice processing error:', error);
+      console.error('   Error details:', {
+        message: error.message,
+        stack: error.stack?.split('\n')[0]
+      });
       
       return {
-        message: `Voice processing failed: ${error.message}. Please check the OpenAI API configuration.`,
-        transcription: '[Error processing audio]',
+        message: `Voice processing failed: ${error.message}. Please try speaking clearly and check your microphone.`,
+        transcription: '[Processing Error]',
         conversationId: `voice-error-${Date.now()}`,
         timestamp: new Date(),
-        mode: 'api_error',
-        openaiConfigured: this.isOpenAIConfigured,
-        error: {
-          status: error.status,
-          message: error.message
-        }
+        mode: 'error',
+        errorDetails: error.message
       };
     }
   }
 
-  // Alternative route names
+  // Alternative endpoints
   @Post('ai/text-command')
   async processTextCommandAlt(@Body() body: TextCommandRequest) {
     return this.processTextCommand(body);
@@ -291,6 +264,17 @@ export class AppController {
   @Post('ai/voice-command')
   @UseInterceptors(FileInterceptor('audio'))
   async processVoiceCommandAlt(@UploadedFile() file: any, @Body() body: any) {
+    return this.processVoiceCommand(file, body);
+  }
+
+  @Post('ai/text')
+  async processText(@Body() body: TextCommandRequest) {
+    return this.processTextCommand(body);
+  }
+
+  @Post('ai/voice')
+  @UseInterceptors(FileInterceptor('audio'))
+  async processVoice(@UploadedFile() file: any, @Body() body: any) {
     return this.processVoiceCommand(file, body);
   }
 }
