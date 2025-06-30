@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
@@ -10,11 +10,11 @@ import { AppService } from './app.service';
       envFilePath: ['.env'],
     }),
   ],
-  controllers: [AppController], // Only the main controller with AI routes built-in
-  providers: [AppService],
+  controllers: [AppController],
+  providers: [AppService, ConfigService], // Add ConfigService to providers
 })
 export class AppModule {
   constructor() {
-    console.log('✅ Simple App Module with built-in AI routes loaded');
+    console.log('✅ App Module with real OpenAI personal assistant integration loaded');
   }
 }

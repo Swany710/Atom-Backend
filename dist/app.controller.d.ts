@@ -1,63 +1,111 @@
 import { AppService } from './app.service';
+import { ConfigService } from '@nestjs/config';
+interface TextCommandRequest {
+    message: string;
+    userId?: string;
+    conversationId?: string;
+}
 export declare class AppController {
     private readonly appService;
-    constructor(appService: AppService);
+    private readonly configService;
+    private openai;
+    private conversations;
+    private isOpenAIConfigured;
+    constructor(appService: AppService, configService: ConfigService);
+    private initializeOpenAI;
     getHello(): string;
     getHealth(): {
         status: string;
         timestamp: string;
     };
-    getTest(): {
-        message: string;
-        timestamp: string;
-    };
     getAIHealth(): {
         status: string;
-        message: string;
+        service: string;
+        openaiConfigured: boolean;
         timestamp: string;
     };
     getAIStatus(): {
         status: string;
-        message: string;
+        aiService: string;
+        mode: string;
+        openaiConfigured: boolean;
         timestamp: string;
     };
-    postAITextCommand1(body: any): {
+    processTextCommand(body: TextCommandRequest): Promise<{
         message: string;
         conversationId: string;
-        timestamp: string;
+        timestamp: Date;
         mode: string;
-    };
-    postAIVoiceCommand1(body: any): {
+        openaiConfigured: boolean;
+        error?: undefined;
+    } | {
+        message: string;
+        conversationId: string;
+        timestamp: Date;
+        mode: string;
+        openaiConfigured: true;
+        error: {
+            status: any;
+            message: any;
+        };
+    }>;
+    processVoiceCommand(file: any, body: any): Promise<{
         message: string;
         transcription: string;
         conversationId: string;
-        timestamp: string;
+        timestamp: Date;
         mode: string;
-    };
-    postAITextCommand(body: any): {
-        message: string;
-        conversationId: string;
-        timestamp: string;
-        mode: string;
-    };
-    postAIVoiceCommand(body: any): {
+        openaiConfigured: boolean;
+        error?: undefined;
+    } | {
         message: string;
         transcription: string;
         conversationId: string;
-        timestamp: string;
+        timestamp: Date;
         mode: string;
-    };
-    postAIText(body: any): {
+        openaiConfigured: true;
+        error: {
+            status: any;
+            message: any;
+        };
+    }>;
+    processTextCommandAlt(body: TextCommandRequest): Promise<{
         message: string;
         conversationId: string;
-        timestamp: string;
+        timestamp: Date;
         mode: string;
-    };
-    postAIVoice(body: any): {
+        openaiConfigured: boolean;
+        error?: undefined;
+    } | {
+        message: string;
+        conversationId: string;
+        timestamp: Date;
+        mode: string;
+        openaiConfigured: true;
+        error: {
+            status: any;
+            message: any;
+        };
+    }>;
+    processVoiceCommandAlt(file: any, body: any): Promise<{
         message: string;
         transcription: string;
         conversationId: string;
-        timestamp: string;
+        timestamp: Date;
         mode: string;
-    };
+        openaiConfigured: boolean;
+        error?: undefined;
+    } | {
+        message: string;
+        transcription: string;
+        conversationId: string;
+        timestamp: Date;
+        mode: string;
+        openaiConfigured: true;
+        error: {
+            status: any;
+            message: any;
+        };
+    }>;
 }
+export {};

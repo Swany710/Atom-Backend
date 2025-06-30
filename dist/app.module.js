@@ -16,7 +16,7 @@ const app_controller_1 = require("./app.controller");
 const app_service_1 = require("./app.service");
 let AppModule = class AppModule {
     constructor() {
-        console.log('✅ Simple App Module with built-in AI routes loaded');
+        console.log('✅ App Module with real OpenAI personal assistant integration loaded');
     }
 };
 exports.AppModule = AppModule;
@@ -29,7 +29,7 @@ exports.AppModule = AppModule = __decorate([
             }),
         ],
         controllers: [app_controller_1.AppController],
-        providers: [app_service_1.AppService],
+        providers: [app_service_1.AppService, config_1.ConfigService],
     }),
     __metadata("design:paramtypes", [])
 ], AppModule);
