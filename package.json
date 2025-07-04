@@ -4,6 +4,7 @@
   "description": "Construction Assistant API with AI Voice Processing",
   "main": "dist/main.js",
   "scripts": {
+    "postinstall": "apt-get update && apt-get install -y ffmpeg || true",
     "build": "nest build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
