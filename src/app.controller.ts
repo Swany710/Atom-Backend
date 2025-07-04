@@ -27,6 +27,19 @@ export class AppController {
     };
   }
 
+  @Get('ai/status')
+  getStatus() {
+    const apiKey = this.configService.get('OPENAI_API_KEY');
+    const isConfigured = !!apiKey && apiKey.startsWith('sk-');
+    
+    return {
+      status: isConfigured ? 'available' : 'configuration_error',
+      aiService: isConfigured ? 'online' : 'offline',
+      mode: isConfigured ? 'openai' : 'error',
+      timestamp: new Date()
+    };
+  }
+
   @Post('ai/text-command')
   async processTextCommand(@Body() body: any) {
     console.log('📝 Text command received:', body.message?.substring(0, 50));
@@ -113,9 +126,9 @@ export class AppController {
     }
   }
 
-  @Post('ai/voice-command1')
+  @Post('ai/voice-command')
   @UseInterceptors(FileInterceptor('audio'))
-  async processVoiceCommand1(@UploadedFile() file: any, @Body() body: any) {
+  async processVoiceCommand(@UploadedFile() file: any, @Body() body: any) {
     console.log('🎤 Voice request received');
     console.log('   File exists:', !!file);
     console.log('   File size:', file?.size || 'no file');
