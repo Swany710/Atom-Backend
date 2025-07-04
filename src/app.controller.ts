@@ -126,7 +126,7 @@ export class AppController {
     }
   }
 
- @Post('ai/voice-command1')
+  @Post('ai/voice-command1')
   @UseInterceptors(FileInterceptor('audio'))
   async processVoiceCommand1(@UploadedFile() file: any, @Body() body: any) {
     console.log('🎤 Voice request received');
@@ -343,3 +343,4 @@ export class AppController {
       };
     }
   }
+}
