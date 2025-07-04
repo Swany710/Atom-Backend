@@ -126,7 +126,7 @@ export class AppController {
     }
   }
 
-  @Post('ai/voice-command1')
+ @Post('ai/voice-command1')
   @UseInterceptors(FileInterceptor('audio'))
   async processVoiceCommand1(@UploadedFile() file: any, @Body() body: any) {
     console.log('🎤 Voice request received');
@@ -166,25 +166,25 @@ export class AppController {
       let transcribedText = '';
       
       try {
-        // Simplified approach - save temp file and use fs.createReadStream
+        // WHISPER-COMPATIBLE APPROACH: Save as .wav file with proper headers
         const tempDir = os.tmpdir();
-        const tempFilePath = path.join(tempDir, `audio_${Date.now()}.webm`);
+        const tempFilePath = path.join(tempDir, `audio_${Date.now()}.wav`);
         
-        console.log('   Saving temporary file:', tempFilePath);
+        console.log('   Saving temporary file as WAV:', tempFilePath);
         fs.writeFileSync(tempFilePath, file.buffer);
         
-        // Use the official OpenAI library approach
+        // Use minimal FormData construction that Whisper accepts
         const FormData = require('form-data');
         const form = new FormData();
         
-        // This is the exact format OpenAI expects
+        // Critical: Use .wav extension and audio/wav content type
         form.append('file', fs.createReadStream(tempFilePath), {
-          filename: 'audio.webm',
-          contentType: 'audio/webm'
+          filename: 'audio.wav',
+          contentType: 'audio/wav'
         });
         form.append('model', 'whisper-1');
         
-        console.log('   Sending to Whisper API...');
+        console.log('   Sending to Whisper API with WAV format...');
         
         const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
           method: 'POST',
@@ -200,12 +200,50 @@ export class AppController {
         if (!response.ok) {
           const errorText = await response.text();
           console.error('❌ Whisper API error:', errorText);
-          throw new Error(`Whisper API failed: ${response.status} - ${errorText}`);
-        }
+          
+          // If WAV fails, try with MP3 extension
+          try {
+            console.log('   Trying MP3 format as fallback...');
+            
+            const mp3FilePath = path.join(tempDir, `audio_${Date.now()}.mp3`);
+            fs.writeFileSync(mp3FilePath, file.buffer);
+            
+            const mp3Form = new FormData();
+            mp3Form.append('file', fs.createReadStream(mp3FilePath), {
+              filename: 'audio.mp3',
+              contentType: 'audio/mp3'
+            });
+            mp3Form.append('model', 'whisper-1');
+            
+            const mp3Response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${apiKey}`,
+                ...mp3Form.getHeaders()
+              },
+              body: mp3Form
+            });
 
-        const transcriptionData = await response.json();
-        transcribedText = transcriptionData.text?.trim() || '';
-        console.log('✅ Transcription successful:', transcribedText.substring(0, 50));
+            if (mp3Response.ok) {
+              const mp3Data = await mp3Response.json();
+              transcribedText = mp3Data.text?.trim() || '';
+              console.log('✅ Transcription successful with MP3 fallback:', transcribedText.substring(0, 50));
+              
+              // Clean up MP3 file
+              try { fs.unlinkSync(mp3FilePath); } catch {}
+            } else {
+              const mp3Error = await mp3Response.text();
+              throw new Error(`Both WAV and MP3 failed. Last error: ${mp3Error}`);
+            }
+            
+          } catch (fallbackError) {
+            throw new Error(`Whisper API failed with both formats: ${errorText}`);
+          }
+        } else {
+          const transcriptionData = await response.json();
+          transcribedText = transcriptionData.text?.trim() || '';
+          console.log('✅ Transcription successful with WAV:', transcribedText.substring(0, 50));
+        }
 
         // Clean up temp file
         try {
@@ -305,4 +343,3 @@ export class AppController {
       };
     }
   }
-}
