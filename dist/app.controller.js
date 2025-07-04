@@ -44,40 +44,47 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 var __param = (this && this.__param) || function (paramIndex, decorator) {
     return function (target, key) { decorator(target, key, paramIndex); }
 };
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AppController = void 0;
 const common_1 = require("@nestjs/common");
 const platform_express_1 = require("@nestjs/platform-express");
 const config_1 = require("@nestjs/config");
-const form_data_1 = __importDefault(require("form-data"));
-const stream_1 = require("stream");
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
-const child_process_1 = require("child_process");
-const util_1 = require("util");
-const execAsync = (0, util_1.promisify)(child_process_1.exec);
+const os = __importStar(require("os"));
 let AppController = class AppController {
     constructor(configService) {
         this.configService = configService;
         this.conversations = new Map();
     }
-    healthCheck() {
+    getHealth() {
         return {
-            status: 'ok',
-            service: 'Personal AI Assistant',
-            openaiConfigured: !!this.configService.get('OPENAI_API_KEY'),
-            timestamp: new Date().toISOString()
+            status: 'healthy',
+            timestamp: new Date(),
+            service: 'Atom Backend API'
         };
     }
-    async processTextCommand1(body) {
-        console.log('💬 Text request:', body.message?.substring(0, 50));
+    getStatus() {
+        const apiKey = this.configService.get('OPENAI_API_KEY');
+        const isConfigured = !!apiKey && apiKey.startsWith('sk-');
+        return {
+            status: isConfigured ? 'available' : 'configuration_error',
+            aiService: isConfigured ? 'online' : 'offline',
+            mode: isConfigured ? 'openai' : 'error',
+            timestamp: new Date()
+        };
+    }
+    async processTextCommand(body) {
+        console.log('📝 Text command received:', body.message?.substring(0, 50));
         try {
             const apiKey = this.configService.get('OPENAI_API_KEY');
-            if (!apiKey) {
-                throw new Error('OpenAI API key not configured');
+            if (!apiKey || !apiKey.startsWith('sk-')) {
+                return {
+                    message: "I need an OpenAI API key to process your request.",
+                    conversationId: `error-${Date.now()}`,
+                    timestamp: new Date(),
+                    mode: 'error'
+                };
             }
             const response = await fetch('https://api.openai.com/v1/chat/completions', {
                 method: 'POST',
@@ -102,10 +109,20 @@ let AppController = class AppController {
                 })
             });
             if (!response.ok) {
+                console.error('❌ OpenAI API Error:', response.status);
+                if (response.status === 401) {
+                    return {
+                        message: "I'm having authentication issues with OpenAI. Please check the API key.",
+                        conversationId: `error-${Date.now()}`,
+                        timestamp: new Date(),
+                        mode: 'error'
+                    };
+                }
                 throw new Error(`OpenAI API error: ${response.status}`);
             }
             const data = await response.json();
             const aiResponse = data.choices[0]?.message?.content || 'Sorry, I could not generate a response.';
+            console.log('✅ GPT Response generated');
             const conversationId = body.conversationId || `${body.userId || 'user'}-${Date.now()}`;
             const conversation = this.conversations.get(conversationId) || [];
             conversation.push({ role: 'user', content: body.message, timestamp: new Date() }, { role: 'assistant', content: aiResponse, timestamp: new Date() });
@@ -158,89 +175,66 @@ let AppController = class AppController {
             console.log('🎤 Processing audio with Whisper API...');
             console.log('   Audio size:', file.size, 'bytes');
             let transcribedText = '';
-            const approaches = [
-                async () => {
-                    console.log('   Trying Approach 1: Direct buffer with WebM...');
-                    const form = new form_data_1.default();
-                    const bufferStream = stream_1.Readable.from(file.buffer);
-                    form.append('file', bufferStream, {
-                        filename: 'audio.webm',
-                        contentType: 'audio/webm',
-                    });
-                    form.append('model', 'whisper-1');
-                    return await this.callWhisperAPI(form, apiKey);
-                },
-                async () => {
-                    console.log('   Trying Approach 2: Temp file approach...');
-                    const tempDir = path.join(process.cwd(), 'temp');
-                    if (!fs.existsSync(tempDir)) {
-                        fs.mkdirSync(tempDir, { recursive: true });
-                    }
-                    const tempFilePath = path.join(tempDir, `audio_${Date.now()}.webm`);
-                    fs.writeFileSync(tempFilePath, file.buffer);
-                    try {
-                        const form = new form_data_1.default();
-                        const fileStream = fs.createReadStream(tempFilePath);
-                        form.append('file', fileStream, {
-                            filename: 'audio.webm',
-                            contentType: 'audio/webm',
-                        });
-                        form.append('model', 'whisper-1');
-                        const result = await this.callWhisperAPI(form, apiKey);
-                        fs.unlinkSync(tempFilePath);
-                        return result;
-                    }
-                    catch (error) {
-                        if (fs.existsSync(tempFilePath)) {
-                            fs.unlinkSync(tempFilePath);
-                        }
-                        throw error;
-                    }
-                },
-                async () => {
-                    console.log('   Trying Approach 3: Fake WAV mime type...');
-                    const form = new form_data_1.default();
-                    const bufferStream = stream_1.Readable.from(file.buffer);
-                    form.append('file', bufferStream, {
-                        filename: 'audio.wav',
-                        contentType: 'audio/wav',
-                    });
-                    form.append('model', 'whisper-1');
-                    return await this.callWhisperAPI(form, apiKey);
-                },
-                async () => {
-                    console.log('   Trying Approach 4: M4A format...');
-                    const form = new form_data_1.default();
-                    const bufferStream = stream_1.Readable.from(file.buffer);
-                    form.append('file', bufferStream, {
-                        filename: 'audio.m4a',
-                        contentType: 'audio/m4a',
-                    });
-                    form.append('model', 'whisper-1');
-                    return await this.callWhisperAPI(form, apiKey);
+            try {
+                const tempDir = os.tmpdir();
+                const tempFilePath = path.join(tempDir, `audio_${Date.now()}.webm`);
+                console.log('   Saving temporary file:', tempFilePath);
+                fs.writeFileSync(tempFilePath, file.buffer);
+                const FormData = require('form-data');
+                const form = new FormData();
+                form.append('file', fs.createReadStream(tempFilePath), {
+                    filename: 'audio.webm',
+                    contentType: 'audio/webm'
+                });
+                form.append('model', 'whisper-1');
+                console.log('   Sending to Whisper API...');
+                const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${apiKey}`,
+                        ...form.getHeaders()
+                    },
+                    body: form
+                });
+                console.log('   Whisper response status:', response.status);
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    console.error('❌ Whisper API error:', errorText);
+                    throw new Error(`Whisper API failed: ${response.status} - ${errorText}`);
                 }
-            ];
-            let lastError = null;
-            for (const approach of approaches) {
+                const transcriptionData = await response.json();
+                transcribedText = transcriptionData.text?.trim() || '';
+                console.log('✅ Transcription successful:', transcribedText.substring(0, 50));
                 try {
-                    const result = await approach();
-                    if (result && result.text) {
-                        transcribedText = result.text.trim();
-                        console.log('✅ Transcription successful:', transcribedText.substring(0, 50));
-                        break;
-                    }
+                    fs.unlinkSync(tempFilePath);
                 }
-                catch (error) {
-                    console.log(`   ❌ Approach failed: ${error.message}`);
-                    lastError = error;
-                    continue;
+                catch (cleanupError) {
+                    console.warn('Could not clean up temp file:', cleanupError.message);
                 }
             }
-            if (!transcribedText) {
-                throw lastError || new Error('All transcription approaches failed');
+            catch (transcriptionError) {
+                console.error('❌ Transcription failed:', transcriptionError.message);
+                return {
+                    message: `I had trouble understanding your voice: ${transcriptionError.message}`,
+                    transcription: '[Transcription Failed]',
+                    conversationId: `voice-error-${Date.now()}`,
+                    timestamp: new Date(),
+                    mode: 'error'
+                };
             }
-            console.log('💭 Calling OpenAI GPT...');
-            const gptResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+            if (!transcribedText || transcribedText.length < 2) {
+                console.log('❌ Empty or very short transcription:', transcribedText);
+                return {
+                    message: "I couldn't understand what you said. Please try speaking more clearly or check your microphone.",
+                    transcription: '[Transcription Too Short]',
+                    conversationId: `voice-error-${Date.now()}`,
+                    timestamp: new Date(),
+                    mode: 'error'
+                };
+            }
+            console.log('🤖 Processing transcribed text with GPT...');
+            console.log('   Transcribed text:', transcribedText);
+            const chatResponse = await fetch('https://api.openai.com/v1/chat/completions', {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${apiKey}`,
@@ -251,7 +245,7 @@ let AppController = class AppController {
                     messages: [
                         {
                             role: 'system',
-                            content: 'You are Atom, a helpful personal AI assistant responding to voice commands. Be friendly, conversational, and genuinely helpful. Keep responses concise but informative.'
+                            content: 'You are Atom, a helpful personal AI assistant. Be friendly, conversational, and genuinely helpful. Keep responses concise but informative.'
                         },
                         {
                             role: 'user',
@@ -262,13 +256,14 @@ let AppController = class AppController {
                     temperature: 0.7,
                 })
             });
-            if (!gptResponse.ok) {
-                throw new Error(`GPT API error: ${gptResponse.status}`);
+            if (!chatResponse.ok) {
+                console.error('❌ GPT API Error:', chatResponse.status);
+                throw new Error(`GPT API error: ${chatResponse.status}`);
             }
-            const gptData = await gptResponse.json();
-            const aiResponse = gptData.choices[0]?.message?.content || 'Sorry, I could not generate a response.';
-            console.log('✅ GPT Response generated');
-            const conversationId = body.conversationId || `${body.userId || 'user'}-voice-${Date.now()}`;
+            const chatData = await chatResponse.json();
+            const aiResponse = chatData.choices[0]?.message?.content || 'Sorry, I could not generate a response.';
+            console.log('✅ Voice processing complete');
+            const conversationId = body.conversationId || `voice-${Date.now()}`;
             const conversation = this.conversations.get(conversationId) || [];
             conversation.push({ role: 'user', content: transcribedText, timestamp: new Date() }, { role: 'assistant', content: aiResponse, timestamp: new Date() });
             this.conversations.set(conversationId, conversation);
@@ -283,43 +278,14 @@ let AppController = class AppController {
         catch (error) {
             console.error('❌ Voice processing error:', error.message);
             return {
-                message: `I had trouble processing your voice command: ${error.message}. Please try speaking clearly or use text instead.`,
-                transcription: '[Processing Failed]',
+                message: `I had trouble processing your voice command: ${error.message}`,
+                transcription: '[Processing Error]',
                 conversationId: `voice-error-${Date.now()}`,
                 timestamp: new Date(),
-                mode: 'error'
+                mode: 'error',
+                error: error.message
             };
         }
-    }
-    async callWhisperAPI(form, apiKey) {
-        const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${apiKey}`,
-                ...form.getHeaders()
-            },
-            body: form
-        });
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error('❌ Whisper API error:', {
-                status: response.status,
-                error: errorText
-            });
-            if (response.status === 400) {
-                throw new Error('Audio format not supported by Whisper');
-            }
-            else if (response.status === 401) {
-                throw new Error('OpenAI API authentication failed');
-            }
-            else if (response.status === 429) {
-                throw new Error('OpenAI API rate limit exceeded');
-            }
-            else {
-                throw new Error(`Whisper API error: ${response.status}`);
-            }
-        }
-        return await response.json();
     }
 };
 exports.AppController = AppController;
@@ -328,14 +294,20 @@ __decorate([
     __metadata("design:type", Function),
     __metadata("design:paramtypes", []),
     __metadata("design:returntype", void 0)
-], AppController.prototype, "healthCheck", null);
+], AppController.prototype, "getHealth", null);
 __decorate([
-    (0, common_1.Post)('ai/text-command1'),
+    (0, common_1.Get)('ai/status'),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", []),
+    __metadata("design:returntype", void 0)
+], AppController.prototype, "getStatus", null);
+__decorate([
+    (0, common_1.Post)('ai/text-command'),
     __param(0, (0, common_1.Body)()),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [Object]),
     __metadata("design:returntype", Promise)
-], AppController.prototype, "processTextCommand1", null);
+], AppController.prototype, "processTextCommand", null);
 __decorate([
     (0, common_1.Post)('ai/voice-command1'),
     (0, common_1.UseInterceptors)((0, platform_express_1.FileInterceptor)('audio')),

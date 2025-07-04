@@ -3,13 +3,18 @@ export declare class AppController {
     private configService;
     private conversations;
     constructor(configService: ConfigService);
-    healthCheck(): {
+    getHealth(): {
         status: string;
+        timestamp: Date;
         service: string;
-        openaiConfigured: boolean;
-        timestamp: string;
     };
-    processTextCommand1(body: any): Promise<{
+    getStatus(): {
+        status: string;
+        aiService: string;
+        mode: string;
+        timestamp: Date;
+    };
+    processTextCommand(body: any): Promise<{
         message: any;
         conversationId: any;
         timestamp: Date;
@@ -28,6 +33,13 @@ export declare class AppController {
         conversationId: any;
         timestamp: Date;
         mode: string;
+        error?: undefined;
+    } | {
+        message: string;
+        transcription: string;
+        conversationId: string;
+        timestamp: Date;
+        mode: string;
+        error: any;
     }>;
-    private callWhisperAPI;
 }

@@ -165,46 +165,47 @@ export class AppController {
 
       let transcribedText = '';
       
-      // ENHANCED: Multiple approaches with temp file method
       try {
-        // Method 1: Temporary file approach (most reliable)
+        // Simplified approach - save temp file and use fs.createReadStream
         const tempDir = os.tmpdir();
         const tempFilePath = path.join(tempDir, `audio_${Date.now()}.webm`);
         
         console.log('   Saving temporary file:', tempFilePath);
         fs.writeFileSync(tempFilePath, file.buffer);
         
-        // Create FormData with file stream
+        // Use the official OpenAI library approach
         const FormData = require('form-data');
         const form = new FormData();
         
+        // This is the exact format OpenAI expects
         form.append('file', fs.createReadStream(tempFilePath), {
           filename: 'audio.webm',
-          contentType: file.mimetype || 'audio/webm',
+          contentType: 'audio/webm'
         });
         form.append('model', 'whisper-1');
-        form.append('response_format', 'json');
         
-        console.log('   Sending to Whisper API with file stream...');
+        console.log('   Sending to Whisper API...');
         
-        const transcriptionResponse = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+        const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${apiKey}`,
-            ...form.getHeaders(),
+            ...form.getHeaders()
           },
           body: form
         });
 
-        console.log('   Whisper response status:', transcriptionResponse.status);
+        console.log('   Whisper response status:', response.status);
 
-        if (transcriptionResponse.ok) {
-          const transcriptionData = await transcriptionResponse.json();
-          transcribedText = transcriptionData.text?.trim() || '';
-          console.log('✅ Transcription successful (Method 1):', transcribedText.substring(0, 50));
-        } else {
-          throw new Error(`Whisper API error: ${transcriptionResponse.status}`);
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('❌ Whisper API error:', errorText);
+          throw new Error(`Whisper API failed: ${response.status} - ${errorText}`);
         }
+
+        const transcriptionData = await response.json();
+        transcribedText = transcriptionData.text?.trim() || '';
+        console.log('✅ Transcription successful:', transcribedText.substring(0, 50));
 
         // Clean up temp file
         try {
@@ -213,76 +214,16 @@ export class AppController {
           console.warn('Could not clean up temp file:', cleanupError.message);
         }
 
-      } catch (primaryError) {
-        console.log('   Method 1 failed, trying Method 2...');
+      } catch (transcriptionError) {
+        console.error('❌ Transcription failed:', transcriptionError.message);
         
-        try {
-          // Method 2: Direct buffer with different filename
-          const FormData = require('form-data');
-          const form = new FormData();
-          
-          form.append('file', file.buffer, {
-            filename: 'audio.wav',
-            contentType: 'audio/wav',
-          });
-          form.append('model', 'whisper-1');
-          form.append('response_format', 'json');
-          
-          const transcriptionResponse = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${apiKey}`,
-              ...form.getHeaders(),
-            },
-            body: form
-          });
-
-          if (transcriptionResponse.ok) {
-            const transcriptionData = await transcriptionResponse.json();
-            transcribedText = transcriptionData.text?.trim() || '';
-            console.log('✅ Transcription successful (Method 2):', transcribedText.substring(0, 50));
-          } else {
-            throw new Error(`Method 2 also failed: ${transcriptionResponse.status}`);
-          }
-
-        } catch (secondaryError) {
-          console.log('   Method 2 failed, trying Method 3...');
-          
-          try {
-            // Method 3: Direct buffer with MP3 extension
-            const FormData = require('form-data');
-            const form = new FormData();
-            
-            form.append('file', file.buffer, {
-              filename: 'audio.mp3',
-              contentType: 'audio/mp3',
-            });
-            form.append('model', 'whisper-1');
-            
-            const transcriptionResponse = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-              method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${apiKey}`,
-                ...form.getHeaders(),
-              },
-              body: form
-            });
-
-            if (transcriptionResponse.ok) {
-              const transcriptionData = await transcriptionResponse.json();
-              transcribedText = transcriptionData.text?.trim() || '';
-              console.log('✅ Transcription successful (Method 3):', transcribedText.substring(0, 50));
-            } else {
-              const errorText = await transcriptionResponse.text();
-              console.error('❌ All methods failed. Last error:', errorText);
-              throw new Error(`All transcription methods failed. Status: ${transcriptionResponse.status}`);
-            }
-
-          } catch (finalError) {
-            console.error('❌ All transcription methods failed:', finalError.message);
-            throw new Error(`Voice transcription failed: ${finalError.message}`);
-          }
-        }
+        return {
+          message: `I had trouble understanding your voice: ${transcriptionError.message}`,
+          transcription: '[Transcription Failed]',
+          conversationId: `voice-error-${Date.now()}`,
+          timestamp: new Date(),
+          mode: 'error'
+        };
       }
 
       // Validate transcription
