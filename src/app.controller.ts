@@ -2,7 +2,7 @@
 import { Controller, Post, Body, UseInterceptors, UploadedFile, Get } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ConfigService } from '@nestjs/config';
-import * as FormData from 'form-data';
+import FormData from 'form-data';
 import { Readable } from 'stream';
 import * as fs from 'fs';
 import * as path from 'path';

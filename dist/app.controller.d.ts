@@ -1,35 +1,17 @@
-import { AppService } from './app.service';
 import { ConfigService } from '@nestjs/config';
-interface TextCommandRequest {
-    message: string;
-    userId?: string;
-    conversationId?: string;
-}
 export declare class AppController {
-    private readonly appService;
-    private readonly configService;
+    private configService;
     private conversations;
-    constructor(appService: AppService, configService: ConfigService);
-    getHello(): string;
-    getHealth(): {
-        status: string;
-        timestamp: string;
-    };
-    getAIHealth(): {
+    constructor(configService: ConfigService);
+    healthCheck(): {
         status: string;
         service: string;
-        openaiConfigured: any;
+        openaiConfigured: boolean;
         timestamp: string;
     };
-    getAIStatus(): {
-        status: string;
-        aiService: string;
-        mode: string;
-        timestamp: string;
-    };
-    processTextCommand1(body: TextCommandRequest): Promise<{
+    processTextCommand1(body: any): Promise<{
         message: any;
-        conversationId: string;
+        conversationId: any;
         timestamp: Date;
         mode: string;
         error?: undefined;
@@ -43,29 +25,9 @@ export declare class AppController {
     processVoiceCommand1(file: any, body: any): Promise<{
         message: any;
         transcription: string;
-        conversationId: string;
+        conversationId: any;
         timestamp: Date;
         mode: string;
-        error?: undefined;
-    } | {
-        message: string;
-        transcription: string;
-        conversationId: string;
-        timestamp: Date;
-        mode: string;
-        error: any;
     }>;
-    getConversation(conversationId: string): {
-        conversationId: string;
-        messages: any[];
-        messageCount: number;
-        timestamp: Date;
-    };
-    clearConversation(body: {
-        conversationId?: string;
-    }): {
-        message: string;
-        timestamp: Date;
-    };
+    private callWhisperAPI;
 }
-export {};

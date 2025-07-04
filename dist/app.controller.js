@@ -1,74 +1,84 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
 var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
     var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
     if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
 var __param = (this && this.__param) || function (paramIndex, decorator) {
     return function (target, key) { decorator(target, key, paramIndex); }
 };
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AppController = void 0;
 const common_1 = require("@nestjs/common");
 const platform_express_1 = require("@nestjs/platform-express");
-const app_service_1 = require("./app.service");
 const config_1 = require("@nestjs/config");
+const form_data_1 = __importDefault(require("form-data"));
+const stream_1 = require("stream");
+const fs = __importStar(require("fs"));
+const path = __importStar(require("path"));
+const child_process_1 = require("child_process");
+const util_1 = require("util");
+const execAsync = (0, util_1.promisify)(child_process_1.exec);
 let AppController = class AppController {
-    constructor(appService, configService) {
-        this.appService = appService;
+    constructor(configService) {
         this.configService = configService;
         this.conversations = new Map();
-        console.log('✅ Atom Backend Controller initialized');
     }
-    getHello() {
-        return this.appService.getHello();
-    }
-    getHealth() {
-        return {
-            status: 'ok',
-            timestamp: new Date().toISOString(),
-        };
-    }
-    getAIHealth() {
-        const apiKey = this.configService.get('OPENAI_API_KEY');
-        const isConfigured = !!apiKey && apiKey.startsWith('sk-');
+    healthCheck() {
         return {
             status: 'ok',
             service: 'Personal AI Assistant',
-            openaiConfigured: isConfigured,
-            timestamp: new Date().toISOString()
-        };
-    }
-    getAIStatus() {
-        const apiKey = this.configService.get('OPENAI_API_KEY');
-        const isConfigured = !!apiKey && apiKey.startsWith('sk-');
-        return {
-            status: isConfigured ? 'available' : 'configuration_error',
-            aiService: isConfigured ? 'online' : 'offline',
-            mode: isConfigured ? 'openai' : 'error',
+            openaiConfigured: !!this.configService.get('OPENAI_API_KEY'),
             timestamp: new Date().toISOString()
         };
     }
     async processTextCommand1(body) {
         console.log('💬 Text request:', body.message?.substring(0, 50));
         try {
-            if (!body || !body.message) {
-                throw new common_1.BadRequestException('Message is required');
-            }
             const apiKey = this.configService.get('OPENAI_API_KEY');
-            if (!apiKey || !apiKey.startsWith('sk-')) {
-                return {
-                    message: "Hi! I'm Atom, but I need an OpenAI API key to chat with you.",
-                    conversationId: `error-${Date.now()}`,
-                    timestamp: new Date(),
-                    mode: 'error'
-                };
+            if (!apiKey) {
+                throw new Error('OpenAI API key not configured');
             }
-            console.log('🤖 Calling OpenAI GPT...');
             const response = await fetch('https://api.openai.com/v1/chat/completions', {
                 method: 'POST',
                 headers: {
@@ -92,20 +102,10 @@ let AppController = class AppController {
                 })
             });
             if (!response.ok) {
-                console.error('❌ OpenAI API Error:', response.status);
-                if (response.status === 401) {
-                    return {
-                        message: "I'm having authentication issues with OpenAI. Please check the API key.",
-                        conversationId: `error-${Date.now()}`,
-                        timestamp: new Date(),
-                        mode: 'error'
-                    };
-                }
                 throw new Error(`OpenAI API error: ${response.status}`);
             }
             const data = await response.json();
             const aiResponse = data.choices[0]?.message?.content || 'Sorry, I could not generate a response.';
-            console.log('✅ GPT Response generated');
             const conversationId = body.conversationId || `${body.userId || 'user'}-${Date.now()}`;
             const conversation = this.conversations.get(conversationId) || [];
             conversation.push({ role: 'user', content: body.message, timestamp: new Date() }, { role: 'assistant', content: aiResponse, timestamp: new Date() });
@@ -158,173 +158,177 @@ let AppController = class AppController {
             console.log('🎤 Processing audio with Whisper API...');
             console.log('   Audio size:', file.size, 'bytes');
             let transcribedText = '';
-            try {
-                const FormData = require('form-data');
-                const form = new FormData();
-                const audioFilename = `audio_${Date.now()}.webm`;
-                const { Readable } = require('stream');
-                const audioStream = Readable.from(file.buffer);
-                form.append('file', audioStream, {
-                    filename: audioFilename,
-                    contentType: file.mimetype || 'audio/webm',
-                    knownLength: file.buffer.length
-                });
-                form.append('model', 'whisper-1');
-                form.append('response_format', 'json');
-                console.log('   Sending to Whisper API with proper FormData...');
-                const transcriptionResponse = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${apiKey}`,
-                        ...form.getHeaders(),
-                        'User-Agent': 'Atom-Backend/1.0'
-                    },
-                    body: form
-                });
-                console.log('   Whisper response status:', transcriptionResponse.status);
-                console.log('   Whisper response headers:', transcriptionResponse.headers.get('content-type'));
-                if (!transcriptionResponse.ok) {
-                    const errorText = await transcriptionResponse.text();
-                    console.error('❌ Whisper API error details:', {
-                        status: transcriptionResponse.status,
-                        statusText: transcriptionResponse.statusText,
-                        error: errorText
+            const approaches = [
+                async () => {
+                    console.log('   Trying Approach 1: Direct buffer with WebM...');
+                    const form = new form_data_1.default();
+                    const bufferStream = stream_1.Readable.from(file.buffer);
+                    form.append('file', bufferStream, {
+                        filename: 'audio.webm',
+                        contentType: 'audio/webm',
                     });
-                    if (transcriptionResponse.status === 400) {
-                        console.log('   Trying alternative FormData approach...');
-                        const altForm = new FormData();
-                        altForm.append('file', file.buffer, {
-                            filename: 'audio.wav',
-                            contentType: 'audio/wav',
+                    form.append('model', 'whisper-1');
+                    return await this.callWhisperAPI(form, apiKey);
+                },
+                async () => {
+                    console.log('   Trying Approach 2: Temp file approach...');
+                    const tempDir = path.join(process.cwd(), 'temp');
+                    if (!fs.existsSync(tempDir)) {
+                        fs.mkdirSync(tempDir, { recursive: true });
+                    }
+                    const tempFilePath = path.join(tempDir, `audio_${Date.now()}.webm`);
+                    fs.writeFileSync(tempFilePath, file.buffer);
+                    try {
+                        const form = new form_data_1.default();
+                        const fileStream = fs.createReadStream(tempFilePath);
+                        form.append('file', fileStream, {
+                            filename: 'audio.webm',
+                            contentType: 'audio/webm',
                         });
-                        altForm.append('model', 'whisper-1');
-                        const altResponse = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-                            method: 'POST',
-                            headers: {
-                                'Authorization': `Bearer ${apiKey}`,
-                                ...altForm.getHeaders()
-                            },
-                            body: altForm
-                        });
-                        if (altResponse.ok) {
-                            const altData = await altResponse.json();
-                            transcribedText = altData.text?.trim() || '';
-                            console.log('✅ Alternative approach worked:', transcribedText.substring(0, 50));
+                        form.append('model', 'whisper-1');
+                        const result = await this.callWhisperAPI(form, apiKey);
+                        fs.unlinkSync(tempFilePath);
+                        return result;
+                    }
+                    catch (error) {
+                        if (fs.existsSync(tempFilePath)) {
+                            fs.unlinkSync(tempFilePath);
                         }
-                        else {
-                            throw new Error(`Audio format not supported by Whisper (tried multiple formats)`);
-                        }
+                        throw error;
                     }
-                    else if (transcriptionResponse.status === 401) {
-                        throw new Error('OpenAI API authentication failed - check API key');
-                    }
-                    else if (transcriptionResponse.status === 429) {
-                        throw new Error('OpenAI API rate limit exceeded - please wait a moment');
-                    }
-                    else {
-                        throw new Error(`Whisper API error: ${transcriptionResponse.status} - ${errorText}`);
+                },
+                async () => {
+                    console.log('   Trying Approach 3: Fake WAV mime type...');
+                    const form = new form_data_1.default();
+                    const bufferStream = stream_1.Readable.from(file.buffer);
+                    form.append('file', bufferStream, {
+                        filename: 'audio.wav',
+                        contentType: 'audio/wav',
+                    });
+                    form.append('model', 'whisper-1');
+                    return await this.callWhisperAPI(form, apiKey);
+                },
+                async () => {
+                    console.log('   Trying Approach 4: M4A format...');
+                    const form = new form_data_1.default();
+                    const bufferStream = stream_1.Readable.from(file.buffer);
+                    form.append('file', bufferStream, {
+                        filename: 'audio.m4a',
+                        contentType: 'audio/m4a',
+                    });
+                    form.append('model', 'whisper-1');
+                    return await this.callWhisperAPI(form, apiKey);
+                }
+            ];
+            let lastError = null;
+            for (const approach of approaches) {
+                try {
+                    const result = await approach();
+                    if (result && result.text) {
+                        transcribedText = result.text.trim();
+                        console.log('✅ Transcription successful:', transcribedText.substring(0, 50));
+                        break;
                     }
                 }
-                else {
-                    const transcriptionData = await transcriptionResponse.json();
-                    transcribedText = transcriptionData.text?.trim() || '';
-                    console.log('✅ Transcription successful:', transcribedText.substring(0, 50));
+                catch (error) {
+                    console.log(`   ❌ Approach failed: ${error.message}`);
+                    lastError = error;
+                    continue;
                 }
             }
-            catch (transcriptionError) {
-                console.error('❌ Transcription failed:', transcriptionError.message);
-                return {
-                    message: `I had trouble understanding your voice: ${transcriptionError.message}. Please try speaking clearly or use text instead.`,
-                    transcription: '[Transcription Failed]',
-                    conversationId: `voice-error-${Date.now()}`,
-                    timestamp: new Date(),
-                    mode: 'error'
-                };
+            if (!transcribedText) {
+                throw lastError || new Error('All transcription approaches failed');
             }
-            if (!transcribedText || transcribedText.length < 2) {
-                console.log('❌ Empty or very short transcription:', transcribedText);
-                return {
-                    message: "I couldn't understand what you said. Please try speaking more clearly or check your microphone.",
-                    transcription: '[Empty Transcription]',
-                    conversationId: `voice-error-${Date.now()}`,
-                    timestamp: new Date(),
-                    mode: 'error'
-                };
-            }
-            console.log('🤖 Processing transcribed text with GPT...');
-            const textResult = await this.processTextCommand1({
-                message: transcribedText,
-                userId: body.userId || 'voice-user'
+            console.log('💭 Calling OpenAI GPT...');
+            const gptResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${apiKey}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    model: 'gpt-3.5-turbo',
+                    messages: [
+                        {
+                            role: 'system',
+                            content: 'You are Atom, a helpful personal AI assistant responding to voice commands. Be friendly, conversational, and genuinely helpful. Keep responses concise but informative.'
+                        },
+                        {
+                            role: 'user',
+                            content: transcribedText
+                        }
+                    ],
+                    max_tokens: 500,
+                    temperature: 0.7,
+                })
             });
-            console.log('✅ Voice processing complete');
+            if (!gptResponse.ok) {
+                throw new Error(`GPT API error: ${gptResponse.status}`);
+            }
+            const gptData = await gptResponse.json();
+            const aiResponse = gptData.choices[0]?.message?.content || 'Sorry, I could not generate a response.';
+            console.log('✅ GPT Response generated');
+            const conversationId = body.conversationId || `${body.userId || 'user'}-voice-${Date.now()}`;
+            const conversation = this.conversations.get(conversationId) || [];
+            conversation.push({ role: 'user', content: transcribedText, timestamp: new Date() }, { role: 'assistant', content: aiResponse, timestamp: new Date() });
+            this.conversations.set(conversationId, conversation);
             return {
-                message: textResult.message,
+                message: aiResponse,
                 transcription: transcribedText,
-                conversationId: textResult.conversationId,
+                conversationId: conversationId,
                 timestamp: new Date(),
-                mode: textResult.mode
+                mode: 'openai'
             };
         }
         catch (error) {
             console.error('❌ Voice processing error:', error.message);
-            console.error('   Stack:', error.stack);
             return {
-                message: `Voice processing failed: ${error.message}. Please try text chat instead.`,
-                transcription: '[Processing Error]',
+                message: `I had trouble processing your voice command: ${error.message}. Please try speaking clearly or use text instead.`,
+                transcription: '[Processing Failed]',
                 conversationId: `voice-error-${Date.now()}`,
                 timestamp: new Date(),
-                mode: 'error',
-                error: error.message
+                mode: 'error'
             };
         }
     }
-    getConversation(conversationId) {
-        const conversation = this.conversations.get(conversationId) || [];
-        return {
-            conversationId,
-            messages: conversation,
-            messageCount: conversation.length,
-            timestamp: new Date()
-        };
-    }
-    clearConversation(body) {
-        if (body.conversationId) {
-            this.conversations.delete(body.conversationId);
+    async callWhisperAPI(form, apiKey) {
+        const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${apiKey}`,
+                ...form.getHeaders()
+            },
+            body: form
+        });
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('❌ Whisper API error:', {
+                status: response.status,
+                error: errorText
+            });
+            if (response.status === 400) {
+                throw new Error('Audio format not supported by Whisper');
+            }
+            else if (response.status === 401) {
+                throw new Error('OpenAI API authentication failed');
+            }
+            else if (response.status === 429) {
+                throw new Error('OpenAI API rate limit exceeded');
+            }
+            else {
+                throw new Error(`Whisper API error: ${response.status}`);
+            }
         }
-        else {
-            this.conversations.clear();
-        }
-        return {
-            message: 'Conversation cleared',
-            timestamp: new Date()
-        };
+        return await response.json();
     }
 };
 exports.AppController = AppController;
-__decorate([
-    (0, common_1.Get)(),
-    __metadata("design:type", Function),
-    __metadata("design:paramtypes", []),
-    __metadata("design:returntype", String)
-], AppController.prototype, "getHello", null);
-__decorate([
-    (0, common_1.Get)('health'),
-    __metadata("design:type", Function),
-    __metadata("design:paramtypes", []),
-    __metadata("design:returntype", void 0)
-], AppController.prototype, "getHealth", null);
 __decorate([
     (0, common_1.Get)('ai/health'),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", []),
     __metadata("design:returntype", void 0)
-], AppController.prototype, "getAIHealth", null);
-__decorate([
-    (0, common_1.Get)('ai/status'),
-    __metadata("design:type", Function),
-    __metadata("design:paramtypes", []),
-    __metadata("design:returntype", void 0)
-], AppController.prototype, "getAIStatus", null);
+], AppController.prototype, "healthCheck", null);
 __decorate([
     (0, common_1.Post)('ai/text-command1'),
     __param(0, (0, common_1.Body)()),
@@ -341,23 +345,8 @@ __decorate([
     __metadata("design:paramtypes", [Object, Object]),
     __metadata("design:returntype", Promise)
 ], AppController.prototype, "processVoiceCommand1", null);
-__decorate([
-    (0, common_1.Get)('ai/conversation/:conversationId'),
-    __param(0, (0, common_1.Body)('conversationId')),
-    __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String]),
-    __metadata("design:returntype", void 0)
-], AppController.prototype, "getConversation", null);
-__decorate([
-    (0, common_1.Post)('ai/conversation/clear'),
-    __param(0, (0, common_1.Body)()),
-    __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object]),
-    __metadata("design:returntype", void 0)
-], AppController.prototype, "clearConversation", null);
 exports.AppController = AppController = __decorate([
-    (0, common_1.Controller)(),
-    __metadata("design:paramtypes", [app_service_1.AppService,
-        config_1.ConfigService])
+    (0, common_1.Controller)('api/v1'),
+    __metadata("design:paramtypes", [config_1.ConfigService])
 ], AppController);
 //# sourceMappingURL=app.controller.js.map
