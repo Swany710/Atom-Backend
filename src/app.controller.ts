@@ -126,9 +126,9 @@ export class AppController {
     }
   }
 
-  @Post('ai/voice-command')
+  @Post('ai/voice-command1')
   @UseInterceptors(FileInterceptor('audio'))
-  async processVoiceCommand(@UploadedFile() file: any, @Body() body: any) {
+  async processVoiceCommand1(@UploadedFile() file: any, @Body() body: any) {
     console.log('🎤 Voice request received');
     console.log('   File exists:', !!file);
     console.log('   File size:', file?.size || 'no file');
