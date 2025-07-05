@@ -143,6 +143,8 @@ export class AppController {
 
   // ===== VOICE PROCESSING =====
   
+// Replace your processVoiceCommand1 method in src/app.controller.ts with this:
+
 @Post('ai/voice-command1')
 @UseInterceptors(FileInterceptor('audio'))
 async processVoiceCommand1(@UploadedFile() file: any, @Body() body: any) {
@@ -174,79 +176,131 @@ async processVoiceCommand1(@UploadedFile() file: any, @Body() body: any) {
       };
     }
 
-    console.log('🎤 Transcribing with Whisper API...');
+    console.log('🎤 Processing with Whisper API...');
 
     let transcribedText = '';
+    let success = false;
 
-    // Try different formats that Whisper accepts better
+    // Import form-data properly
     const FormData = require('form-data');
 
-    // Try as MP4 first (Whisper likes this better than WebM)
-    const form = new FormData();
-    form.append('file', file.buffer, {
-      filename: 'audio.mp4',
-      contentType: 'audio/mp4'
-    });
-    form.append('model', 'whisper-1');
-
-    const whisperResponse = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        ...form.getHeaders()
-      },
-      body: form
-    });
-
-    if (whisperResponse.ok) {
-      const transcription = await whisperResponse.json();
-      transcribedText = transcription.text?.trim() || '';
-      console.log('✅ Transcribed with MP4:', transcribedText.substring(0, 50));
-    } else {
-      // If MP4 fails, try as WAV
-      console.log('MP4 failed, trying WAV...');
-      
-      const wavForm = new FormData();
-      wavForm.append('file', file.buffer, {
-        filename: 'audio.wav',
-        contentType: 'audio/wav'
+    // Strategy 1: Try as MP4 (frontend's new format)
+    try {
+      console.log('   Attempting MP4 format...');
+      const form = new FormData();
+      form.append('file', file.buffer, {
+        filename: 'audio.mp4',
+        contentType: 'audio/mp4',
+        knownLength: file.size
       });
-      wavForm.append('model', 'whisper-1');
-      
-      const wavResponse = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      form.append('model', 'whisper-1');
+
+      const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${apiKey}`,
-          ...wavForm.getHeaders()
+          ...form.getHeaders()
         },
-        body: wavForm
+        body: form
       });
-      
-      if (wavResponse.ok) {
-        const transcription = await wavResponse.json();
-        transcribedText = transcription.text?.trim() || '';
-        console.log('✅ Transcribed with WAV:', transcribedText.substring(0, 50));
+
+      if (response.ok) {
+        const result = await response.json();
+        transcribedText = result.text?.trim() || '';
+        success = true;
+        console.log('✅ MP4 transcription successful:', transcribedText.substring(0, 50));
       } else {
-        const error = await wavResponse.text();
-        console.error('❌ Both MP4 and WAV failed:', error);
-        throw new Error(`Transcription failed: ${wavResponse.status}`);
+        const errorText = await response.text();
+        console.log('❌ MP4 failed:', response.status, errorText);
+      }
+    } catch (error) {
+      console.log('❌ MP4 attempt failed:', error.message);
+    }
+
+    // Strategy 2: Try as M4A if MP4 failed
+    if (!success) {
+      try {
+        console.log('   Attempting M4A format...');
+        const form = new FormData();
+        form.append('file', file.buffer, {
+          filename: 'audio.m4a',
+          contentType: 'audio/m4a',
+          knownLength: file.size
+        });
+        form.append('model', 'whisper-1');
+
+        const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            ...form.getHeaders()
+          },
+          body: form
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+          transcribedText = result.text?.trim() || '';
+          success = true;
+          console.log('✅ M4A transcription successful:', transcribedText.substring(0, 50));
+        } else {
+          const errorText = await response.text();
+          console.log('❌ M4A failed:', response.status, errorText);
+        }
+      } catch (error) {
+        console.log('❌ M4A attempt failed:', error.message);
       }
     }
-    
-    if (!transcribedText || transcribedText.length < 1) {
+
+    // Strategy 3: Try as WebM if both MP4 and M4A failed
+    if (!success) {
+      try {
+        console.log('   Attempting WebM format...');
+        const form = new FormData();
+        form.append('file', file.buffer, {
+          filename: 'audio.webm',
+          contentType: 'audio/webm',
+          knownLength: file.size
+        });
+        form.append('model', 'whisper-1');
+
+        const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            ...form.getHeaders()
+          },
+          body: form
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+          transcribedText = result.text?.trim() || '';
+          success = true;
+          console.log('✅ WebM transcription successful:', transcribedText.substring(0, 50));
+        } else {
+          const errorText = await response.text();
+          console.log('❌ WebM failed:', response.status, errorText);
+        }
+      } catch (error) {
+        console.log('❌ WebM attempt failed:', error.message);
+      }
+    }
+
+    // If all strategies failed
+    if (!success || !transcribedText) {
       return {
-        message: "I couldn't understand what you said. Please try speaking more clearly.",
-        transcription: '[Empty]',
+        message: "I'm having trouble processing your voice. Please try speaking more clearly or check your microphone.",
+        transcription: '[Processing Failed]',
         conversationId: `voice-error-${Date.now()}`,
         timestamp: new Date(),
         mode: 'error'
       };
     }
 
-    console.log('✅ Transcribed:', transcribedText.substring(0, 50));
-    console.log('🤖 Processing with GPT...');
+    console.log('🤖 Processing transcription with GPT...');
 
-    // Process with GPT (same as text endpoint)
+    // Process with GPT
     const gptResponse = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -297,11 +351,11 @@ async processVoiceCommand1(@UploadedFile() file: any, @Body() body: any) {
     };
 
   } catch (error) {
-    console.error('❌ Voice processing failed:', error.message);
+    console.error('❌ Voice processing error:', error.message);
     
     return {
-      message: `Voice processing failed: ${error.message}. Please try again.`,
-      transcription: '[Error]',
+      message: `I had trouble processing your voice command: ${error.message}`,
+      transcription: '[Processing Error]',
       conversationId: `voice-error-${Date.now()}`,
       timestamp: new Date(),
       mode: 'error',
