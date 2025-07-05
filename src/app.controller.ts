@@ -145,6 +145,8 @@ export class AppController {
   
 // Replace your processVoiceCommand1 method in src/app.controller.ts with this:
 
+// Replace your processVoiceCommand1 method in src/app.controller.ts with this:
+
 @Post('ai/voice-command1')
 @UseInterceptors(FileInterceptor('audio'))
 async processVoiceCommand1(@UploadedFile() file: any, @Body() body: any) {
@@ -181,18 +183,23 @@ async processVoiceCommand1(@UploadedFile() file: any, @Body() body: any) {
     let transcribedText = '';
     let success = false;
 
-    // Import form-data properly
+    // Use direct approach that OpenAI reliably accepts
+    const fs = require('fs');
+    const path = require('path');
+    const os = require('os');
     const FormData = require('form-data');
 
-    // Strategy 1: Try as MP4 (frontend's new format)
+    // Create a temporary file - this is the most reliable approach for OpenAI
+    const tempDir = os.tmpdir();
+    const tempFilePath = path.join(tempDir, `audio_${Date.now()}.mp4`);
+    
     try {
-      console.log('   Attempting MP4 format...');
+      console.log('   Creating temporary file:', tempFilePath);
+      fs.writeFileSync(tempFilePath, file.buffer);
+      
+      console.log('   Sending to Whisper API...');
       const form = new FormData();
-      form.append('file', file.buffer, {
-        filename: 'audio.mp4',
-        contentType: 'audio/mp4',
-        knownLength: file.size
-      });
+      form.append('file', fs.createReadStream(tempFilePath), 'audio.mp4');
       form.append('model', 'whisper-1');
 
       const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
@@ -204,86 +211,35 @@ async processVoiceCommand1(@UploadedFile() file: any, @Body() body: any) {
         body: form
       });
 
+      console.log('   Whisper response status:', response.status);
+
       if (response.ok) {
         const result = await response.json();
         transcribedText = result.text?.trim() || '';
         success = true;
-        console.log('✅ MP4 transcription successful:', transcribedText.substring(0, 50));
+        console.log('✅ Transcription successful:', transcribedText.substring(0, 50));
       } else {
         const errorText = await response.text();
-        console.log('❌ MP4 failed:', response.status, errorText);
+        console.log('❌ Whisper API error:', response.status, errorText);
       }
+
+      // Clean up temp file
+      try {
+        fs.unlinkSync(tempFilePath);
+      } catch (cleanupError) {
+        console.warn('Could not clean up temp file:', cleanupError.message);
+      }
+
     } catch (error) {
-      console.log('❌ MP4 attempt failed:', error.message);
-    }
-
-    // Strategy 2: Try as M4A if MP4 failed
-    if (!success) {
+      console.log('❌ Transcription attempt failed:', error.message);
+      
+      // Clean up temp file if it exists
       try {
-        console.log('   Attempting M4A format...');
-        const form = new FormData();
-        form.append('file', file.buffer, {
-          filename: 'audio.m4a',
-          contentType: 'audio/m4a',
-          knownLength: file.size
-        });
-        form.append('model', 'whisper-1');
-
-        const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${apiKey}`,
-            ...form.getHeaders()
-          },
-          body: form
-        });
-
-        if (response.ok) {
-          const result = await response.json();
-          transcribedText = result.text?.trim() || '';
-          success = true;
-          console.log('✅ M4A transcription successful:', transcribedText.substring(0, 50));
-        } else {
-          const errorText = await response.text();
-          console.log('❌ M4A failed:', response.status, errorText);
+        if (fs.existsSync(tempFilePath)) {
+          fs.unlinkSync(tempFilePath);
         }
-      } catch (error) {
-        console.log('❌ M4A attempt failed:', error.message);
-      }
-    }
-
-    // Strategy 3: Try as WebM if both MP4 and M4A failed
-    if (!success) {
-      try {
-        console.log('   Attempting WebM format...');
-        const form = new FormData();
-        form.append('file', file.buffer, {
-          filename: 'audio.webm',
-          contentType: 'audio/webm',
-          knownLength: file.size
-        });
-        form.append('model', 'whisper-1');
-
-        const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${apiKey}`,
-            ...form.getHeaders()
-          },
-          body: form
-        });
-
-        if (response.ok) {
-          const result = await response.json();
-          transcribedText = result.text?.trim() || '';
-          success = true;
-          console.log('✅ WebM transcription successful:', transcribedText.substring(0, 50));
-        } else {
-          const errorText = await response.text();
-          console.log('❌ WebM failed:', response.status, errorText);
-        }
-      } catch (error) {
-        console.log('❌ WebM attempt failed:', error.message);
+      } catch (cleanupError) {
+        // Ignore cleanup errors
       }
     }
 
