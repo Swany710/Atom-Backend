@@ -143,252 +143,240 @@ export class AppController {
 
   // ===== VOICE PROCESSING =====
   
-  // Replace ONLY the processVoiceCommand1 method in your app.controller.ts with this robust version:
+  @Post('ai/voice-command1')
+  @UseInterceptors(FileInterceptor('audio'))
+  async processVoiceCommand1(@UploadedFile() file: any, @Body() body: any) {
+    console.log('🎤 Voice command received');
+    console.log('   File exists:', !!file);
+    console.log('   File size:', file?.size || 'no file');
+    console.log('   File type:', file?.mimetype || 'no type');
+    console.log('   Original name:', file?.originalname || 'no name');
 
-// Replace the processVoiceCommand1 method in your app.controller.ts with this fixed version
-
-// COMPLETE BACKEND FIX: Replace processVoiceCommand1 in app.controller.ts
-
-// EXACT FIX for app.controller.ts processVoiceCommand1 method
-// This fixes the "Could not parse multipart form" error
-
-@Post('ai/voice-command1')
-@UseInterceptors(FileInterceptor('audio'))
-async processVoiceCommand1(@UploadedFile() file: any, @Body() body: any) {
-  console.log('🎤 Voice command received');
-  console.log('   File exists:', !!file);
-  console.log('   File size:', file?.size || 'no file');
-  console.log('   File type:', file?.mimetype || 'no type');
-  console.log('   Original name:', file?.originalname || 'no name');
-
-  try {
-    // Validate audio file
-    if (!file || !file.buffer || file.size === 0) {
-      console.log('❌ No audio file received');
-      return {
-        message: "I didn't receive any audio file. Please check your microphone permissions and try recording again.",
-        transcription: '[No Audio File]',
-        conversationId: `voice-error-${Date.now()}`,
-        timestamp: new Date(),
-        mode: 'error'
-      };
-    }
-
-    // Validate API key
-    const apiKey = this.configService.get('OPENAI_API_KEY');
-    if (!apiKey || !apiKey.startsWith('sk-')) {
-      console.log('❌ OpenAI API key not configured');
-      return {
-        message: "I can hear you, but I need an OpenAI API key to process voice commands.",
-        transcription: '[API Key Missing]',
-        conversationId: `voice-error-${Date.now()}`,
-        timestamp: new Date(),
-        mode: 'error'
-      };
-    }
-
-    console.log('🎤 Processing audio with Whisper API...');
-
-    // CRITICAL FIX: Proper FormData construction for Whisper API
-    let transcribedText = '';
     try {
-      const FormData = require('form-data');
-      const form = new FormData();
-      
-      // FIX 1: Determine correct file extension based on actual content
-      let fileExtension = 'webm';
-      let mimeType = 'audio/webm';
-      
-      if (file.mimetype) {
-        if (file.mimetype.includes('mp4')) {
-          fileExtension = 'mp4';
-          mimeType = 'audio/mp4';
-        } else if (file.mimetype.includes('webm')) {
-          fileExtension = 'webm';
-          mimeType = 'audio/webm';
-        } else if (file.mimetype.includes('wav')) {
-          fileExtension = 'wav';
-          mimeType = 'audio/wav';
-        } else if (file.mimetype.includes('ogg')) {
-          fileExtension = 'ogg';
-          mimeType = 'audio/ogg';
-        }
-      }
-      
-      // FIX 2: Create filename that matches content type
-      const fileName = `audio.${fileExtension}`;
-      
-      console.log('   Processed file details:');
-      console.log('   - Filename:', fileName);
-      console.log('   - MIME type:', mimeType);
-      console.log('   - File size:', file.size);
-      
-      // FIX 3: Proper FormData append with correct options
-      form.append('file', file.buffer, {
-        filename: fileName,
-        contentType: mimeType,
-        knownLength: file.size
-      });
-      form.append('model', 'whisper-1');
-      form.append('response_format', 'json');
-      form.append('language', 'en'); // Helps with processing speed
-
-      console.log('   Sending to Whisper API...');
-      
-      // FIX 4: Use node-fetch with proper headers
-      const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          // Don't set Content-Type - let form-data set it with boundary
-          ...form.getHeaders()
-        },
-        body: form
-      });
-
-      console.log('   Whisper response status:', response.status);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('❌ Whisper API error:', response.status, errorText);
-        
-        // Parse the error for better user feedback
-        let errorMessage = "I had trouble understanding your voice.";
-        try {
-          const errorData = JSON.parse(errorText);
-          if (errorData.error?.message?.includes('multipart form')) {
-            errorMessage = "There was an issue with the audio format. Please try recording again.";
-          } else if (errorData.error?.message?.includes('file format')) {
-            errorMessage = "The audio format wasn't recognized. Please try again.";
-          }
-        } catch (e) {
-          // Use default error message
-        }
-        
+      // Validate audio file
+      if (!file || !file.buffer || file.size === 0) {
+        console.log('❌ No audio file received');
         return {
-          message: errorMessage,
-          transcription: '[Whisper API Error]',
+          message: "I didn't receive any audio file. Please check your microphone permissions and try recording again.",
+          transcription: '[No Audio File]',
           conversationId: `voice-error-${Date.now()}`,
           timestamp: new Date(),
           mode: 'error'
         };
       }
 
-      const transcriptionData = await response.json();
-      transcribedText = transcriptionData.text?.trim() || '';
+      // Validate API key
+      const apiKey = this.configService.get('OPENAI_API_KEY');
+      if (!apiKey || !apiKey.startsWith('sk-')) {
+        console.log('❌ OpenAI API key not configured');
+        return {
+          message: "I can hear you, but I need an OpenAI API key to process voice commands.",
+          transcription: '[API Key Missing]',
+          conversationId: `voice-error-${Date.now()}`,
+          timestamp: new Date(),
+          mode: 'error'
+        };
+      }
+
+      console.log('🎤 Processing audio with Whisper API...');
+
+      // CRITICAL FIX: Proper FormData construction for Whisper API
+      let transcribedText = '';
+      try {
+        const FormData = require('form-data');
+        const form = new FormData();
+        
+        // Determine correct file extension based on actual content
+        let fileExtension = 'webm';
+        let mimeType = 'audio/webm';
+        
+        if (file.mimetype) {
+          if (file.mimetype.includes('mp4')) {
+            fileExtension = 'mp4';
+            mimeType = 'audio/mp4';
+          } else if (file.mimetype.includes('webm')) {
+            fileExtension = 'webm';
+            mimeType = 'audio/webm';
+          } else if (file.mimetype.includes('wav')) {
+            fileExtension = 'wav';
+            mimeType = 'audio/wav';
+          } else if (file.mimetype.includes('ogg')) {
+            fileExtension = 'ogg';
+            mimeType = 'audio/ogg';
+          }
+        }
+        
+        // Create filename that matches content type
+        const fileName = `audio.${fileExtension}`;
+        
+        console.log('   Processed file details:');
+        console.log('   - Filename:', fileName);
+        console.log('   - MIME type:', mimeType);
+        console.log('   - File size:', file.size);
+        
+        // CRITICAL: Proper FormData append with correct options
+        form.append('file', file.buffer, {
+          filename: fileName,
+          contentType: mimeType,
+          knownLength: file.size
+        });
+        form.append('model', 'whisper-1');
+        form.append('response_format', 'json');
+        form.append('language', 'en');
+
+        console.log('   Sending to Whisper API...');
+        
+        const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            ...form.getHeaders()
+          },
+          body: form
+        });
+
+        console.log('   Whisper response status:', response.status);
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('❌ Whisper API error:', response.status, errorText);
+          
+          let errorMessage = "I had trouble understanding your voice.";
+          try {
+            const errorData = JSON.parse(errorText);
+            if (errorData.error?.message?.includes('multipart form')) {
+              errorMessage = "There was an issue with the audio format. Please try recording again.";
+            } else if (errorData.error?.message?.includes('file format')) {
+              errorMessage = "The audio format wasn't recognized. Please try again.";
+            }
+          } catch (e) {
+            // Use default error message
+          }
+          
+          return {
+            message: errorMessage,
+            transcription: '[Whisper API Error]',
+            conversationId: `voice-error-${Date.now()}`,
+            timestamp: new Date(),
+            mode: 'error'
+          };
+        }
+
+        const transcriptionData = await response.json();
+        transcribedText = transcriptionData.text?.trim() || '';
+        
+        console.log('✅ Transcription successful:', transcribedText.substring(0, 50) + '...');
+
+      } catch (transcriptionError) {
+        console.error('❌ Transcription failed:', transcriptionError.message);
+        return {
+          message: `Voice processing failed: ${transcriptionError.message}`,
+          transcription: '[Transcription Failed]',
+          conversationId: `voice-error-${Date.now()}`,
+          timestamp: new Date(),
+          mode: 'error'
+        };
+      }
+
+      // Validate transcription result
+      if (!transcribedText || transcribedText.length < 1) {
+        console.log('❌ Empty transcription result');
+        return {
+          message: "I couldn't understand what you said. Please try speaking more clearly.",
+          transcription: '[Empty Transcription]',
+          conversationId: `voice-error-${Date.now()}`,
+          timestamp: new Date(),
+          mode: 'error'
+        };
+      }
+
+      console.log('🤖 Processing transcribed text with OpenAI...');
       
-      console.log('✅ Transcription successful:', transcribedText.substring(0, 50) + '...');
-
-    } catch (transcriptionError) {
-      console.error('❌ Transcription failed:', transcriptionError.message);
-      return {
-        message: `Voice processing failed: ${transcriptionError.message}`,
-        transcription: '[Transcription Failed]',
-        conversationId: `voice-error-${Date.now()}`,
-        timestamp: new Date(),
-        mode: 'error'
-      };
-    }
-
-    // Validate transcription result
-    if (!transcribedText || transcribedText.length < 1) {
-      console.log('❌ Empty transcription result');
-      return {
-        message: "I couldn't understand what you said. Please try speaking more clearly.",
-        transcription: '[Empty Transcription]',
-        conversationId: `voice-error-${Date.now()}`,
-        timestamp: new Date(),
-        mode: 'error'
-      };
-    }
-
-    console.log('🤖 Processing transcribed text with OpenAI...');
-    
-    // Process with OpenAI Chat API
-    const conversationId = body.conversationId || `voice-${Date.now()}`;
-    const userId = body.userId || 'default-user';
-    
-    // Get conversation history
-    const conversation = this.conversations.get(conversationId) || [];
-    
-    // Prepare messages for OpenAI
-    const messages = [
-      {
-        role: 'system',
-        content: `You are Atom, a helpful personal AI assistant. The user just spoke to you.
-        Be friendly, conversational, and helpful. Keep responses concise.
-        User said: "${transcribedText}"`
-      },
-      ...conversation.slice(-8), // Keep last 8 messages for context
-      {
-        role: 'user',
-        content: transcribedText
-      }
-    ];
-
-    try {
-      const aiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
+      // Process with OpenAI Chat API
+      const conversationId = body.conversationId || `voice-${Date.now()}`;
+      const userId = body.userId || 'default-user';
+      
+      // Get conversation history
+      const conversation = this.conversations.get(conversationId) || [];
+      
+      // Prepare messages for OpenAI
+      const messages = [
+        {
+          role: 'system',
+          content: `You are Atom, a helpful personal AI assistant. The user just spoke to you.
+          Be friendly, conversational, and helpful. Keep responses concise.
+          User said: "${transcribedText}"`
         },
-        body: JSON.stringify({
-          model: 'gpt-3.5-turbo',
-          messages: messages,
-          max_tokens: 400,
-          temperature: 0.7,
-        })
-      });
+        ...conversation.slice(-8), // Keep last 8 messages for context
+        {
+          role: 'user',
+          content: transcribedText
+        }
+      ];
 
-      if (!aiResponse.ok) {
-        console.error('❌ OpenAI Chat API Error:', aiResponse.status);
-        throw new Error(`OpenAI API error: ${aiResponse.status}`);
+      try {
+        const aiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'gpt-3.5-turbo',
+            messages: messages,
+            max_tokens: 400,
+            temperature: 0.7,
+          })
+        });
+
+        if (!aiResponse.ok) {
+          console.error('❌ OpenAI Chat API Error:', aiResponse.status);
+          throw new Error(`OpenAI API error: ${aiResponse.status}`);
+        }
+
+        const aiData = await aiResponse.json();
+        const aiResponseText = aiData.choices[0]?.message?.content || 'Sorry, I could not generate a response.';
+
+        console.log('✅ Voice processing complete');
+
+        // Store conversation
+        conversation.push(
+          { role: 'user', content: transcribedText, timestamp: new Date() },
+          { role: 'assistant', content: aiResponseText, timestamp: new Date() }
+        );
+        this.conversations.set(conversationId, conversation);
+
+        return {
+          message: aiResponseText,
+          transcription: transcribedText,
+          conversationId: conversationId,
+          timestamp: new Date(),
+          mode: 'openai'
+        };
+
+      } catch (aiError) {
+        console.error('❌ AI processing error:', aiError.message);
+        return {
+          message: `I heard: "${transcribedText}" but couldn't generate a response. Please try again.`,
+          transcription: transcribedText,
+          conversationId: conversationId,
+          timestamp: new Date(),
+          mode: 'error'
+        };
       }
 
-      const aiData = await aiResponse.json();
-      const aiResponseText = aiData.choices[0]?.message?.content || 'Sorry, I could not generate a response.';
-
-      console.log('✅ Voice processing complete');
-
-      // Store conversation
-      conversation.push(
-        { role: 'user', content: transcribedText, timestamp: new Date() },
-        { role: 'assistant', content: aiResponseText, timestamp: new Date() }
-      );
-      this.conversations.set(conversationId, conversation);
-
+    } catch (error) {
+      console.error('❌ Voice processing error:', error.message);
       return {
-        message: aiResponseText,
-        transcription: transcribedText,
-        conversationId: conversationId,
+        message: `Voice processing failed: ${error.message}`,
+        transcription: '[Processing Error]',
+        conversationId: `voice-error-${Date.now()}`,
         timestamp: new Date(),
-        mode: 'openai'
-      };
-
-    } catch (aiError) {
-      console.error('❌ AI processing error:', aiError.message);
-      return {
-        message: `I heard: "${transcribedText}" but couldn't generate a response. Please try again.`,
-        transcription: transcribedText,
-        conversationId: conversationId,
-        timestamp: new Date(),
-        mode: 'error'
+        mode: 'error',
+        error: error.message
       };
     }
-
-  } catch (error) {
-    console.error('❌ Voice processing error:', error.message);
-    return {
-      message: `Voice processing failed: ${error.message}`,
-      transcription: '[Processing Error]',
-      conversationId: `voice-error-${Date.now()}`,
-      timestamp: new Date(),
-      mode: 'error',
-      error: error.message
-    };
   }
-}
 
   // ===== CONVERSATION MANAGEMENT =====
   
