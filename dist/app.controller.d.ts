@@ -14,7 +14,7 @@ export declare class AppController {
         mode: string;
         timestamp: Date;
     };
-    processTextCommand(body: any): Promise<{
+    processTextCommand1(body: any): Promise<{
         message: any;
         conversationId: any;
         timestamp: Date;
@@ -28,11 +28,18 @@ export declare class AppController {
         error: any;
     }>;
     processVoiceCommand1(file: any, body: any): Promise<{
-        message: any;
+        message: string;
         transcription: string;
-        conversationId: any;
+        conversationId: string;
         timestamp: Date;
         mode: string;
+        error?: undefined;
+    } | {
+        message: string;
+        transcription: string;
+        mode: string;
+        timestamp: Date;
+        conversationId?: undefined;
         error?: undefined;
     } | {
         message: string;
@@ -42,4 +49,21 @@ export declare class AppController {
         mode: string;
         error: any;
     }>;
+    getConversation(id: string): {
+        conversationId: string;
+        messages: any[];
+        messageCount: number;
+        timestamp: Date;
+    };
+    clearConversation(id: string): {
+        message: string;
+        timestamp: Date;
+    };
+    getAllConversations(): {
+        conversations: {
+            id: string;
+            messageCount: number;
+            lastMessage: any;
+        }[];
+    };
 }
