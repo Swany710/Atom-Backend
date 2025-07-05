@@ -1,120 +1,130 @@
-// src/ai/ai-voice.service.ts
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import OpenAI from 'openai';
-import { N8NService } from '../n8n/n8n.service';
+import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
+
+// Interfaces
+interface ProcessResult {
+  response: string;
+  conversationId: string;
+  transcription?: string;
+}
 
 @Injectable()
 export class AIVoiceService {
-  private readonly logger = new Logger(AIVoiceService.name);
   private openai: OpenAI;
+  private conversations: Map<string, ChatCompletionMessageParam[]> = new Map();
 
-  constructor(
-    private configService: ConfigService,
-    private n8nService: N8NService,
-  ) {
-    const apiKey = this.configService.get('OPENAI_API_KEY');
-    
-    if (apiKey) {
-      this.openai = new OpenAI({ apiKey });
-      this.logger.log('OpenAI initialized successfully');
-    } else {
-      this.logger.warn('OpenAI API key not configured');
-    }
+  constructor(private configService: ConfigService) {
+    this.openai = new OpenAI({
+      apiKey: this.configService.get('OPENAI_API_KEY'),
+    });
   }
 
-  async processVoiceCommand(command: any) {
+  async processTextCommand(
+    message: string,
+    userId: string,
+    conversationId?: string
+  ): Promise<ProcessResult> {
     try {
-      const userInput = command.transcription || command.textInput;
+      // Use provided conversationId or create a new one
+      const currentConversationId = conversationId || `${userId}-${Date.now()}`;
       
-      if (!userInput) {
-        return {
-          response: "I didn't receive any input. Please try again.",
-          actions: [],
-          confidence: 0,
-          success: false
-        };
-      }
-
-      this.logger.log(`Processing voice command: "${userInput}"`);
-
-      // Simple response for now
-      const response = await this.generateSimpleResponse(userInput);
+      // Get or create conversation history
+      const conversationHistory = this.conversations.get(currentConversationId) || [];
       
-      return {
-        response,
-        actions: [],
-        confidence: 0.8,
-        success: true
-      };
-
-    } catch (error) {
-      this.logger.error('Error processing voice command:', error);
-      return {
-        response: "I encountered an error processing your request. Please try again.",
-        actions: [],
-        confidence: 0,
-        success: false
-      };
-    }
-  }
-
-  private async generateSimpleResponse(userInput: string): Promise<string> {
-    if (!this.openai) {
-      return "I can help you with voice commands, but OpenAI is not configured yet.";
-    }
-
-    try {
-      const response = await this.openai.chat.completions.create({
-        model: 'gpt-4',
+      // Add user message to history
+      conversationHistory.push({ role: 'user', content: message } as ChatCompletionMessageParam);
+      
+      // Call OpenAI with conversation context
+      const completion = await this.openai.chat.completions.create({
+        model: 'gpt-3.5-turbo',
         messages: [
           {
             role: 'system',
-            content: 'You are a helpful AI assistant for construction professionals. Respond briefly and helpfully.'
-          },
-          {
-            role: 'user',
-            content: userInput
-          }
+            content: 'You are Atom, a helpful AI construction assistant. You help with construction projects, planning, and problem-solving. Be concise and practical in your responses.'
+          } as ChatCompletionMessageParam,
+          ...conversationHistory
         ],
+        max_tokens: 500,
         temperature: 0.7,
-        max_tokens: 150
       });
 
-      return response.choices[0].message.content;
+      const aiResponse = completion.choices[0]?.message?.content || 'I apologize, but I could not generate a response.';
+      
+      // Add AI response to history
+      conversationHistory.push({ role: 'assistant', content: aiResponse } as ChatCompletionMessageParam);
+      
+      // Store updated conversation (in memory for now)
+      this.conversations.set(currentConversationId, conversationHistory);
+
+      return {
+        response: aiResponse,
+        conversationId: currentConversationId,
+      };
     } catch (error) {
-      this.logger.error('OpenAI API error:', error);
-      return "I'm having trouble connecting to my AI brain right now. Please try again.";
+      console.error('OpenAI API error:', error);
+      throw new Error('Failed to process text command');
     }
   }
 
-  async transcribeAudio(audioBuffer: Buffer): Promise<string> {
-    console.log('Received audio buffer size:', audioBuffer.length);
-    
-    if (!this.openai) {
-      throw new Error('OpenAI not configured for transcription');
-    }
-
+  async processVoiceCommand(
+    audioBuffer: Buffer,
+    userId: string,
+    conversationId?: string
+  ): Promise<ProcessResult> {
     try {
-      // Create a temporary file for the audio
-      const fs = require('fs');
-      const path = require('path');
-      const tempPath = path.join(require('os').tmpdir(), `audio_${Date.now()}.mp3`);
+      // Step 1: Transcribe audio using OpenAI Whisper
+      const transcription = await this.transcribeAudio(audioBuffer);
       
-      fs.writeFileSync(tempPath, audioBuffer);
+      // Step 2: Process the transcribed text
+      const result = await this.processTextCommand(transcription, userId, conversationId);
+      
+      return {
+        ...result,
+        transcription,
+      };
+    } catch (error) {
+      console.error('Voice command processing error:', error);
+      throw new Error('Failed to process voice command');
+    }
+  }
 
+  private async transcribeAudio(audioBuffer: Buffer): Promise<string> {
+    try {
+      // Create a File-like object for OpenAI
+      const audioFile = new File([audioBuffer], 'audio.wav', { type: 'audio/wav' });
+      
       const transcription = await this.openai.audio.transcriptions.create({
-        file: fs.createReadStream(tempPath),
+        file: audioFile,
         model: 'whisper-1',
       });
 
-      // Clean up temp file
-      fs.unlinkSync(tempPath);
-
-      return transcription.text;
+      return transcription.text || 'Could not transcribe audio';
     } catch (error) {
-      this.logger.error('Transcription failed:', error);
-      throw error;
+      console.error('Transcription error:', error);
+      throw new Error('Failed to transcribe audio');
     }
+  }
+
+  // Get conversation history for a specific conversation
+  getConversationHistory(conversationId: string): ChatCompletionMessageParam[] {
+    return this.conversations.get(conversationId) || [];
+  }
+
+  // Clear conversation history
+  clearConversation(conversationId: string): void {
+    this.conversations.delete(conversationId);
+  }
+
+  // Get all active conversations for a user
+  getUserConversations(userId: string): string[] {
+    const userConversations: string[] = [];
+    for (const [conversationId] of this.conversations) {
+      if (conversationId.startsWith(userId)) {
+        userConversations.push(conversationId);
+      }
+    }
+    return userConversations;
   }
 }

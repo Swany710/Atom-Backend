@@ -1,129 +1,130 @@
-// src/ai/ai-voice.controller.ts
-import { Controller, Post, Body, Get, BadRequestException, Logger } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Get,
+  Body,
+  UploadedFile,
+  UseInterceptors,
+  BadRequestException,
+  HttpException,
+  HttpStatus,
+  Query,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { AIVoiceService } from './ai-voice.service';
-import { N8NService } from '../n8n/n8n.service';
 
-@Controller('ai')
+// Interfaces for request/response
+interface TextCommandRequest {
+  message: string;
+  userId?: string;
+  conversationId?: string;
+}
+
+interface VoiceCommandResponse {
+  message: string;
+  transcription: string;
+  conversationId: string;
+  timestamp: Date;
+}
+
+interface TextCommandResponse {
+  message: string;
+  conversationId: string;
+  timestamp: Date;
+}
+
+interface MulterFile {
+  fieldname: string;
+  originalname: string;
+  encoding: string;
+  mimetype: string;
+  size: number;
+  buffer: Buffer;
+}
+
+@Controller('api/v1/ai')
 export class AIVoiceController {
-  private readonly logger = new Logger(AIVoiceController.name);
+  constructor(private readonly aiVoiceService: AIVoiceService) {}
 
-  constructor(
-    private aiVoiceService: AIVoiceService,
-    private n8nService: N8NService,
-  ) {}
-
-  @Post('voice-command')
-  async processVoiceCommand(@Body() dto: any) {
-    try {
-      let transcription: string | undefined;
-
-      // Handle audio data if provided
-      if (dto.audioData) {
-        const audioBuffer = Buffer.from(dto.audioData, 'base64');
-        transcription = await this.aiVoiceService.transcribeAudio(audioBuffer);
-      }
-
-      // Process the command
-      const result = await this.aiVoiceService.processVoiceCommand({
-        transcription,
-        textInput: dto.textInput
-      });
-
-      return {
-        success: result.success,
-        response: result.response,
-        transcription,
-        actions: result.actions,
-        confidence: result.confidence,
-        timestamp: new Date().toISOString()
-      };
-
-    } catch (error) {
-      this.logger.error('Voice command processing failed:', error);
-      throw new BadRequestException('Failed to process voice command');
-    }
+  @Get('health')
+  getHealth() {
+    return { 
+      status: 'ok', 
+      service: 'AI Voice Service',
+      timestamp: new Date().toISOString()
+    };
   }
 
-  @Post('text-command')
-  async processTextCommand(@Body() body: { message: string }) {
+  @Get('status') 
+  getStatus() {
+    return {
+      status: 'available',
+      aiService: 'online',
+      timestamp: new Date().toISOString()
+    };
+  }
+
+  @Post('text')
+  async handleTextCommand(@Body() body: TextCommandRequest): Promise<TextCommandResponse> {
     if (!body.message) {
       throw new BadRequestException('Message is required');
     }
 
     try {
-      const result = await this.aiVoiceService.processVoiceCommand({
-        textInput: body.message
-      });
+      const result = await this.aiVoiceService.processTextCommand(
+        body.message,
+        body.userId || 'default-user',
+        body.conversationId
+      );
 
       return {
-        success: result.success,
-        response: result.response,
-        actions: result.actions,
-        confidence: result.confidence,
-        timestamp: new Date().toISOString()
-      };
-
-    } catch (error) {
-      this.logger.error('Text command processing failed:', error);
-      throw new BadRequestException('Failed to process text command');
-    }
-  }
-
-  @Get('test-n8n')
-  async testN8NConnections() {
-    try {
-      const connections = await this.n8nService.testConnections();
-      
-      return {
-        success: true,
-        connections,
-        timestamp: new Date().toISOString()
+        message: result.response,
+        conversationId: result.conversationId,
+        timestamp: new Date(),
       };
     } catch (error) {
-      this.logger.error('N8N connection test failed:', error);
-      return {
-        success: false,
-        error: error.message,
-        timestamp: new Date().toISOString()
-      };
-    }
-  }
-@Get('test')
-async simpleTest() {
-  return { 
-    message: 'AI Controller is working!', 
-    timestamp: new Date().toISOString() 
-  };
-}
-  @Get('status')
-  async getStatus() {
-    try {
-      const n8nConnections = await this.n8nService.testConnections();
-      
-      return {
-        status: 'healthy',
-        features: {
-          voice_transcription: !!process.env.OPENAI_API_KEY,
-          ai_processing: !!process.env.OPENAI_API_KEY,
-          n8n_calendar: n8nConnections.calendar,
-          n8n_email: n8nConnections.email,
-          n8n_reminder: n8nConnections.reminder
+      console.error('Text command error:', error);
+      throw new HttpException(
+        {
+          message: 'Failed to process text command', 
+          error: error.message,
+          statusCode: HttpStatus.INTERNAL_SERVER_ERROR
         },
-        endpoints: [
-          'POST /api/v1/ai/voice-command - Process voice or text commands',
-          'POST /api/v1/ai/text-command - Process text commands',
-          'GET /api/v1/ai/test-n8n - Test N8N connections',
-          'GET /api/v1/ai/status - Get service status'
-        ],
-        timestamp: new Date().toISOString()
+        HttpStatus.INTERNAL_SERVER_ERROR
+      );
+    }
+  }
+
+  @Post('voice')
+  @UseInterceptors(FileInterceptor('audio'))
+  async handleVoiceCommand(
+    @UploadedFile() file: MulterFile,
+    @Query('userId') userId: string = 'default-user',
+    @Query('conversationId') conversationId?: string
+  ): Promise<VoiceCommandResponse> {
+    if (!file) {
+      throw new BadRequestException('Audio file is required');
+    }
+
+    try {
+      const result = await this.aiVoiceService.processVoiceCommand(
+        file.buffer,
+        userId,
+        conversationId
+      );
+
+      return {
+        message: result.response,
+        transcription: result.transcription,
+        conversationId: result.conversationId,
+        timestamp: new Date(),
       };
     } catch (error) {
-      this.logger.error('Status check failed:', error);
-      return {
-        status: 'error',
-        error: error.message,
-        timestamp: new Date().toISOString()
-      };
+      console.error('Voice command error:', error);
+      throw new HttpException(
+        'Failed to process voice command',
+        HttpStatus.INTERNAL_SERVER_ERROR
+      );
     }
   }
 }
