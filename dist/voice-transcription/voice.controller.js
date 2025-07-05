@@ -15,13 +15,13 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.N8NVoiceController = void 0;
+exports.VoiceController = void 0;
 const common_1 = require("@nestjs/common");
 const platform_express_1 = require("@nestjs/platform-express");
 const axios_1 = __importDefault(require("axios"));
 const form_data_1 = __importDefault(require("form-data"));
-let N8NVoiceController = class N8NVoiceController {
-    async forwardToN8N(file) {
+let VoiceController = class VoiceController {
+    async handleVoiceCommand(file) {
         if (!file)
             throw new common_1.BadRequestException('No file uploaded');
         const form = new form_data_1.default();
@@ -42,16 +42,16 @@ let N8NVoiceController = class N8NVoiceController {
         }
     }
 };
-exports.N8NVoiceController = N8NVoiceController;
+exports.VoiceController = VoiceController;
 __decorate([
-    (0, common_1.Post)('webhook'),
+    (0, common_1.Post)('voice-command'),
     (0, common_1.UseInterceptors)((0, platform_express_1.FileInterceptor)('data')),
     __param(0, (0, common_1.UploadedFile)()),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [Object]),
     __metadata("design:returntype", Promise)
-], N8NVoiceController.prototype, "forwardToN8N", null);
-exports.N8NVoiceController = N8NVoiceController = __decorate([
-    (0, common_1.Controller)('n8n-voice')
-], N8NVoiceController);
+], VoiceController.prototype, "handleVoiceCommand", null);
+exports.VoiceController = VoiceController = __decorate([
+    (0, common_1.Controller)('voice')
+], VoiceController);
 //# sourceMappingURL=voice.controller.js.map

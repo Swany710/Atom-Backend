@@ -1,45 +1,19 @@
-import { ConfigService } from '@nestjs/config';
+import { AppService } from './app.service';
 export declare class AppController {
-    private configService;
-    private conversations;
-    constructor(configService: ConfigService);
+    private readonly appService;
+    constructor(appService: AppService);
+    getHello(): string;
     getHealth(): {
         status: string;
-        timestamp: Date;
-        service: string;
+        timestamp: string;
+        uptime: number;
+        memory: NodeJS.MemoryUsage;
+        environment: string;
     };
-    getStatus(): {
-        status: string;
-        aiService: string;
-        mode: string;
-        timestamp: Date;
+    getVersion(): {
+        version: string;
+        name: string;
+        description: string;
+        author: string;
     };
-    processTextCommand(body: any): Promise<{
-        message: any;
-        conversationId: any;
-        timestamp: Date;
-        mode: string;
-        error?: undefined;
-    } | {
-        message: string;
-        conversationId: string;
-        timestamp: Date;
-        mode: string;
-        error: any;
-    }>;
-    processVoiceCommand1(file: any, body: any): Promise<{
-        message: any;
-        transcription: string;
-        conversationId: any;
-        timestamp: Date;
-        mode: string;
-        error?: undefined;
-    } | {
-        message: string;
-        transcription: string;
-        conversationId: string;
-        timestamp: Date;
-        mode: string;
-        error: any;
-    }>;
 }

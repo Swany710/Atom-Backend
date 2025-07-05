@@ -1,0 +1,93 @@
+// src/n8n/n8n.service.ts
+import { Injectable, Logger } from '@nestjs/common';
+import { HttpService } from '@nestjs/axios';
+import { ConfigService } from '@nestjs/config';
+
+@Injectable()
+export class N8NService {
+  private readonly logger = new Logger(N8NService.name);
+
+  constructor(
+    private httpService: HttpService,
+    private configService: ConfigService,
+  ) {}
+
+  async testConnections(): Promise<{ [key: string]: boolean }> {
+    const tests = {
+      calendar: !!this.configService.get('N8N_CALENDAR_WEBHOOK_URL'),
+      email: !!this.configService.get('N8N_EMAIL_WEBHOOK_URL'),
+      reminder: !!this.configService.get('N8N_REMINDER_WEBHOOK_URL')
+    };
+
+    this.logger.log('N8N connection test results:', tests);
+    return tests;
+  }
+
+  async executeCalendarWorkflow(data: any) {
+    const webhookUrl = this.configService.get('N8N_CALENDAR_WEBHOOK_URL');
+    
+    if (!webhookUrl) {
+      return {
+        success: false,
+        workflowName: 'calendar',
+        error: 'Calendar webhook URL not configured'
+      };
+    }
+
+    try {
+      this.logger.log(`Executing calendar workflow: ${data.title}`);
+      
+      const response = await this.httpService.post(webhookUrl, {
+        ...data,
+        timestamp: new Date().toISOString()
+      }).toPromise();
+
+      return {
+        success: true,
+        workflowName: 'calendar',
+        result: response.data
+      };
+    } catch (error) {
+      this.logger.error('Calendar workflow failed:', error.message);
+      return {
+        success: false,
+        workflowName: 'calendar',
+        error: error.message
+      };
+    }
+  }
+
+  async executeEmailWorkflow(data: any) {
+    const webhookUrl = this.configService.get('N8N_EMAIL_WEBHOOK_URL');
+    
+    if (!webhookUrl) {
+      return {
+        success: false,
+        workflowName: 'email',
+        error: 'Email webhook URL not configured'
+      };
+    }
+
+    try {
+      this.logger.log(`Executing email workflow: ${data.subject}`);
+      
+      const response = await this.httpService.post(webhookUrl, {
+        ...data,
+        timestamp: new Date().toISOString()
+      }).toPromise();
+
+      return {
+        success: true,
+        workflowName: 'email',
+        result: response.data
+      };
+    } catch (error) {
+      this.logger.error('Email workflow failed:', error.message);
+      return {
+        success: false,
+        workflowName: 'email',
+        error: error.message
+      };
+    }
+  }
+}
