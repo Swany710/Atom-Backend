@@ -149,6 +149,9 @@ export class AppController {
 
 // COMPLETE BACKEND FIX: Replace processVoiceCommand1 in app.controller.ts
 
+// EXACT FIX for app.controller.ts processVoiceCommand1 method
+// This fixes the "Could not parse multipart form" error
+
 @Post('ai/voice-command1')
 @UseInterceptors(FileInterceptor('audio'))
 async processVoiceCommand1(@UploadedFile() file: any, @Body() body: any) {
@@ -171,24 +174,12 @@ async processVoiceCommand1(@UploadedFile() file: any, @Body() body: any) {
       };
     }
 
-    // Validate minimum file size (at least 1KB)
-    if (file.size < 1000) {
-      console.log('❌ Audio file too small:', file.size);
-      return {
-        message: "The audio recording is too short. Please speak for at least 1 second.",
-        transcription: '[Audio Too Short]',
-        conversationId: `voice-error-${Date.now()}`,
-        timestamp: new Date(),
-        mode: 'error'
-      };
-    }
-
     // Validate API key
     const apiKey = this.configService.get('OPENAI_API_KEY');
     if (!apiKey || !apiKey.startsWith('sk-')) {
       console.log('❌ OpenAI API key not configured');
       return {
-        message: "I can hear you, but I need an OpenAI API key to process voice commands. Please configure the OPENAI_API_KEY environment variable.",
+        message: "I can hear you, but I need an OpenAI API key to process voice commands.",
         transcription: '[API Key Missing]',
         conversationId: `voice-error-${Date.now()}`,
         timestamp: new Date(),
@@ -198,27 +189,58 @@ async processVoiceCommand1(@UploadedFile() file: any, @Body() body: any) {
 
     console.log('🎤 Processing audio with Whisper API...');
 
-    // FIXED: Simple, direct approach - no multiple attempts
+    // CRITICAL FIX: Proper FormData construction for Whisper API
     let transcribedText = '';
     try {
       const FormData = require('form-data');
       const form = new FormData();
       
-      // FIXED: Direct buffer append - no streams, no file system
+      // FIX 1: Determine correct file extension based on actual content
+      let fileExtension = 'webm';
+      let mimeType = 'audio/webm';
+      
+      if (file.mimetype) {
+        if (file.mimetype.includes('mp4')) {
+          fileExtension = 'mp4';
+          mimeType = 'audio/mp4';
+        } else if (file.mimetype.includes('webm')) {
+          fileExtension = 'webm';
+          mimeType = 'audio/webm';
+        } else if (file.mimetype.includes('wav')) {
+          fileExtension = 'wav';
+          mimeType = 'audio/wav';
+        } else if (file.mimetype.includes('ogg')) {
+          fileExtension = 'ogg';
+          mimeType = 'audio/ogg';
+        }
+      }
+      
+      // FIX 2: Create filename that matches content type
+      const fileName = `audio.${fileExtension}`;
+      
+      console.log('   Processed file details:');
+      console.log('   - Filename:', fileName);
+      console.log('   - MIME type:', mimeType);
+      console.log('   - File size:', file.size);
+      
+      // FIX 3: Proper FormData append with correct options
       form.append('file', file.buffer, {
-        filename: file.originalname || 'audio.webm',
-        contentType: file.mimetype || 'audio/webm'
+        filename: fileName,
+        contentType: mimeType,
+        knownLength: file.size
       });
       form.append('model', 'whisper-1');
       form.append('response_format', 'json');
+      form.append('language', 'en'); // Helps with processing speed
 
       console.log('   Sending to Whisper API...');
-      console.log('   File details:', file.originalname, file.mimetype, file.size);
       
+      // FIX 4: Use node-fetch with proper headers
       const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${apiKey}`,
+          // Don't set Content-Type - let form-data set it with boundary
           ...form.getHeaders()
         },
         body: form
@@ -230,14 +252,17 @@ async processVoiceCommand1(@UploadedFile() file: any, @Body() body: any) {
         const errorText = await response.text();
         console.error('❌ Whisper API error:', response.status, errorText);
         
-        // Better error handling based on status code
+        // Parse the error for better user feedback
         let errorMessage = "I had trouble understanding your voice.";
-        if (response.status === 400) {
-          errorMessage = "The audio format wasn't recognized. Please try again.";
-        } else if (response.status === 401) {
-          errorMessage = "Authentication issue with voice processing.";
-        } else if (response.status === 429) {
-          errorMessage = "Voice processing is temporarily overloaded. Please try again in a moment.";
+        try {
+          const errorData = JSON.parse(errorText);
+          if (errorData.error?.message?.includes('multipart form')) {
+            errorMessage = "There was an issue with the audio format. Please try recording again.";
+          } else if (errorData.error?.message?.includes('file format')) {
+            errorMessage = "The audio format wasn't recognized. Please try again.";
+          }
+        } catch (e) {
+          // Use default error message
         }
         
         return {
@@ -252,12 +277,12 @@ async processVoiceCommand1(@UploadedFile() file: any, @Body() body: any) {
       const transcriptionData = await response.json();
       transcribedText = transcriptionData.text?.trim() || '';
       
-      console.log('✅ Transcription result:', transcribedText);
+      console.log('✅ Transcription successful:', transcribedText.substring(0, 50) + '...');
 
     } catch (transcriptionError) {
       console.error('❌ Transcription failed:', transcriptionError.message);
       return {
-        message: `I had trouble processing your voice: ${transcriptionError.message}`,
+        message: `Voice processing failed: ${transcriptionError.message}`,
         transcription: '[Transcription Failed]',
         conversationId: `voice-error-${Date.now()}`,
         timestamp: new Date(),
@@ -279,7 +304,7 @@ async processVoiceCommand1(@UploadedFile() file: any, @Body() body: any) {
 
     console.log('🤖 Processing transcribed text with OpenAI...');
     
-    // Step 2: Process with OpenAI
+    // Process with OpenAI Chat API
     const conversationId = body.conversationId || `voice-${Date.now()}`;
     const userId = body.userId || 'default-user';
     
@@ -290,11 +315,11 @@ async processVoiceCommand1(@UploadedFile() file: any, @Body() body: any) {
     const messages = [
       {
         role: 'system',
-        content: `You are Atom, a helpful personal AI assistant. The user just spoke to you via voice.
-        Be friendly, conversational, and genuinely helpful. Keep responses concise but informative.
-        The user said: "${transcribedText}"`
+        content: `You are Atom, a helpful personal AI assistant. The user just spoke to you.
+        Be friendly, conversational, and helpful. Keep responses concise.
+        User said: "${transcribedText}"`
       },
-      ...conversation.slice(-10), // Keep last 10 messages for context
+      ...conversation.slice(-8), // Keep last 8 messages for context
       {
         role: 'user',
         content: transcribedText
@@ -311,13 +336,13 @@ async processVoiceCommand1(@UploadedFile() file: any, @Body() body: any) {
         body: JSON.stringify({
           model: 'gpt-3.5-turbo',
           messages: messages,
-          max_tokens: 500,
+          max_tokens: 400,
           temperature: 0.7,
         })
       });
 
       if (!aiResponse.ok) {
-        console.error('❌ OpenAI API Error:', aiResponse.status);
+        console.error('❌ OpenAI Chat API Error:', aiResponse.status);
         throw new Error(`OpenAI API error: ${aiResponse.status}`);
       }
 
@@ -344,7 +369,7 @@ async processVoiceCommand1(@UploadedFile() file: any, @Body() body: any) {
     } catch (aiError) {
       console.error('❌ AI processing error:', aiError.message);
       return {
-        message: `I heard: "${transcribedText}" but had trouble generating a response. Please try again.`,
+        message: `I heard: "${transcribedText}" but couldn't generate a response. Please try again.`,
         transcription: transcribedText,
         conversationId: conversationId,
         timestamp: new Date(),
@@ -355,7 +380,7 @@ async processVoiceCommand1(@UploadedFile() file: any, @Body() body: any) {
   } catch (error) {
     console.error('❌ Voice processing error:', error.message);
     return {
-      message: `I had trouble processing your voice command: ${error.message}`,
+      message: `Voice processing failed: ${error.message}`,
       transcription: '[Processing Error]',
       conversationId: `voice-error-${Date.now()}`,
       timestamp: new Date(),
