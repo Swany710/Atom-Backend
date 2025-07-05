@@ -143,182 +143,179 @@ export class AppController {
 
   // ===== VOICE PROCESSING =====
   
-// Replace your processVoiceCommand1 method in src/app.controller.ts with this:
+  @Post('ai/voice-command1')
+  @UseInterceptors(FileInterceptor('audio'))
+  async processVoiceCommand1(@UploadedFile() file: any, @Body() body: any) {
+    console.log('🎤 Voice request received');
+    console.log('   File size:', file?.size || 'no file');
+    console.log('   File type:', file?.mimetype || 'no type');
 
-// Replace your processVoiceCommand1 method in src/app.controller.ts with this:
-
-@Post('ai/voice-command1')
-@UseInterceptors(FileInterceptor('audio'))
-async processVoiceCommand1(@UploadedFile() file: any, @Body() body: any) {
-  console.log('🎤 Voice request received');
-  console.log('   File size:', file?.size || 'no file');
-  console.log('   File type:', file?.mimetype || 'no type');
-
-  try {
-    // Validate input
-    if (!file || !file.buffer || file.size === 0) {
-      return {
-        message: "I didn't receive any audio. Please check your microphone permissions.",
-        transcription: '[No Audio]',
-        conversationId: `voice-error-${Date.now()}`,
-        timestamp: new Date(),
-        mode: 'error'
-      };
-    }
-
-    // Check API key
-    const apiKey = this.configService.get('OPENAI_API_KEY');
-    if (!apiKey || !apiKey.startsWith('sk-')) {
-      return {
-        message: "I need an OpenAI API key to process voice commands.",
-        transcription: '[API Key Missing]',
-        conversationId: `voice-error-${Date.now()}`,
-        timestamp: new Date(),
-        mode: 'error'
-      };
-    }
-
-    console.log('🎤 Processing with Whisper API...');
-
-    let transcribedText = '';
-    let success = false;
-
-    // Use direct approach that OpenAI reliably accepts
-    const fs = require('fs');
-    const path = require('path');
-    const os = require('os');
-    const FormData = require('form-data');
-
-    // Create a temporary file - this is the most reliable approach for OpenAI
-    const tempDir = os.tmpdir();
-    const tempFilePath = path.join(tempDir, `audio_${Date.now()}.mp4`);
-    
     try {
-      console.log('   Creating temporary file:', tempFilePath);
-      fs.writeFileSync(tempFilePath, file.buffer);
-      
-      console.log('   Sending to Whisper API...');
-      const form = new FormData();
-      form.append('file', fs.createReadStream(tempFilePath), 'audio.mp4');
-      form.append('model', 'whisper-1');
+      // Validate input
+      if (!file || !file.buffer || file.size === 0) {
+        return {
+          message: "I didn't receive any audio. Please check your microphone permissions.",
+          transcription: '[No Audio]',
+          conversationId: `voice-error-${Date.now()}`,
+          timestamp: new Date(),
+          mode: 'error'
+        };
+      }
 
-      const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      // Check API key
+      const apiKey = this.configService.get('OPENAI_API_KEY');
+      if (!apiKey || !apiKey.startsWith('sk-')) {
+        return {
+          message: "I need an OpenAI API key to process voice commands.",
+          transcription: '[API Key Missing]',
+          conversationId: `voice-error-${Date.now()}`,
+          timestamp: new Date(),
+          mode: 'error'
+        };
+      }
+
+      console.log('🎤 Processing with Whisper API...');
+
+      // Use the reliable approach for OpenAI Whisper
+      const fs = require('fs');
+      const path = require('path');
+      const os = require('os');
+      const FormData = require('form-data');
+
+      let transcribedText = '';
+      let success = false;
+
+      // Create temporary file (most reliable approach for OpenAI)
+      const tempDir = os.tmpdir();
+      const tempFilePath = path.join(tempDir, `audio_${Date.now()}.mp4`);
+      
+      try {
+        console.log('   Creating temporary file:', tempFilePath);
+        fs.writeFileSync(tempFilePath, file.buffer);
+        
+        console.log('   Sending to Whisper API...');
+        const form = new FormData();
+        form.append('file', fs.createReadStream(tempFilePath), 'audio.mp4');
+        form.append('model', 'whisper-1');
+
+        const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            ...form.getHeaders()
+          },
+          body: form
+        });
+
+        console.log('   Whisper response status:', response.status);
+
+        if (response.ok) {
+          const result = await response.json();
+          transcribedText = result.text?.trim() || '';
+          success = true;
+          console.log('✅ Transcription successful:', transcribedText.substring(0, 50));
+        } else {
+          const errorText = await response.text();
+          console.log('❌ Whisper API error:', response.status, errorText);
+        }
+
+        // Clean up temp file
+        try {
+          fs.unlinkSync(tempFilePath);
+        } catch (cleanupError) {
+          console.warn('Could not clean up temp file:', cleanupError.message);
+        }
+
+      } catch (error) {
+        console.log('❌ Transcription attempt failed:', error.message);
+        
+        // Clean up temp file if it exists
+        try {
+          if (fs.existsSync(tempFilePath)) {
+            fs.unlinkSync(tempFilePath);
+          }
+        } catch (cleanupError) {
+          // Ignore cleanup errors
+        }
+      }
+
+      // If transcription failed
+      if (!success || !transcribedText) {
+        return {
+          message: "I'm having trouble processing your voice. Please try speaking more clearly or check your microphone.",
+          transcription: '[Processing Failed]',
+          conversationId: `voice-error-${Date.now()}`,
+          timestamp: new Date(),
+          mode: 'error'
+        };
+      }
+
+      console.log('🤖 Processing transcription with GPT...');
+
+      // Process with GPT
+      const gptResponse = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${apiKey}`,
-          ...form.getHeaders()
+          'Content-Type': 'application/json',
         },
-        body: form
+        body: JSON.stringify({
+          model: 'gpt-3.5-turbo',
+          messages: [
+            {
+              role: 'system',
+              content: 'You are Atom, a helpful personal AI assistant. Be friendly, conversational, and genuinely helpful. Keep responses concise but informative.'
+            },
+            {
+              role: 'user',
+              content: transcribedText
+            }
+          ],
+          max_tokens: 500,
+          temperature: 0.7,
+        })
       });
 
-      console.log('   Whisper response status:', response.status);
-
-      if (response.ok) {
-        const result = await response.json();
-        transcribedText = result.text?.trim() || '';
-        success = true;
-        console.log('✅ Transcription successful:', transcribedText.substring(0, 50));
-      } else {
-        const errorText = await response.text();
-        console.log('❌ Whisper API error:', response.status, errorText);
+      if (!gptResponse.ok) {
+        throw new Error(`AI processing failed: ${gptResponse.status}`);
       }
 
-      // Clean up temp file
-      try {
-        fs.unlinkSync(tempFilePath);
-      } catch (cleanupError) {
-        console.warn('Could not clean up temp file:', cleanupError.message);
-      }
+      const gptData = await gptResponse.json();
+      const aiMessage = gptData.choices[0]?.message?.content || 'Sorry, I could not generate a response.';
+
+      console.log('✅ Voice processing complete');
+
+      // Store in conversation history
+      const conversationId = body.conversationId || `voice-${Date.now()}`;
+      const conversation = this.conversations.get(conversationId) || [];
+      conversation.push(
+        { role: 'user', content: transcribedText, timestamp: new Date() },
+        { role: 'assistant', content: aiMessage, timestamp: new Date() }
+      );
+      this.conversations.set(conversationId, conversation);
+
+      return {
+        message: aiMessage,
+        transcription: transcribedText,
+        conversationId: conversationId,
+        timestamp: new Date(),
+        mode: 'openai'
+      };
 
     } catch (error) {
-      console.log('❌ Transcription attempt failed:', error.message);
+      console.error('❌ Voice processing error:', error.message);
       
-      // Clean up temp file if it exists
-      try {
-        if (fs.existsSync(tempFilePath)) {
-          fs.unlinkSync(tempFilePath);
-        }
-      } catch (cleanupError) {
-        // Ignore cleanup errors
-      }
-    }
-
-    // If all strategies failed
-    if (!success || !transcribedText) {
       return {
-        message: "I'm having trouble processing your voice. Please try speaking more clearly or check your microphone.",
-        transcription: '[Processing Failed]',
+        message: `I had trouble processing your voice command: ${error.message}`,
+        transcription: '[Processing Error]',
         conversationId: `voice-error-${Date.now()}`,
         timestamp: new Date(),
-        mode: 'error'
+        mode: 'error',
+        error: error.message
       };
     }
-
-    console.log('🤖 Processing transcription with GPT...');
-
-    // Process with GPT
-    const gptResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'gpt-3.5-turbo',
-        messages: [
-          {
-            role: 'system',
-            content: 'You are Atom, a helpful personal AI assistant. Be friendly, conversational, and genuinely helpful. Keep responses concise but informative.'
-          },
-          {
-            role: 'user',
-            content: transcribedText
-          }
-        ],
-        max_tokens: 500,
-        temperature: 0.7,
-      })
-    });
-
-    if (!gptResponse.ok) {
-      throw new Error(`AI processing failed: ${gptResponse.status}`);
-    }
-
-    const gptData = await gptResponse.json();
-    const aiMessage = gptData.choices[0]?.message?.content || 'Sorry, I could not generate a response.';
-
-    console.log('✅ Voice processing complete');
-
-    // Store in conversation history
-    const conversationId = body.conversationId || `voice-${Date.now()}`;
-    const conversation = this.conversations.get(conversationId) || [];
-    conversation.push(
-      { role: 'user', content: transcribedText, timestamp: new Date() },
-      { role: 'assistant', content: aiMessage, timestamp: new Date() }
-    );
-    this.conversations.set(conversationId, conversation);
-
-    return {
-      message: aiMessage,
-      transcription: transcribedText,
-      conversationId: conversationId,
-      timestamp: new Date(),
-      mode: 'openai'
-    };
-
-  } catch (error) {
-    console.error('❌ Voice processing error:', error.message);
-    
-    return {
-      message: `I had trouble processing your voice command: ${error.message}`,
-      transcription: '[Processing Error]',
-      conversationId: `voice-error-${Date.now()}`,
-      timestamp: new Date(),
-      mode: 'error',
-      error: error.message
-    };
   }
-}
+
   // ===== CONVERSATION MANAGEMENT =====
   
   @Get('ai/conversations/:id')
