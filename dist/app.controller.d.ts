@@ -1,8 +1,10 @@
+import { AIVoiceService } from './ai/ai-voice.service';
 import { ConfigService } from '@nestjs/config';
 export declare class AppController {
     private configService;
+    private readonly aiVoiceService;
     private conversations;
-    constructor(configService: ConfigService);
+    constructor(configService: ConfigService, aiVoiceService: AIVoiceService);
     getHealth(): {
         status: string;
         timestamp: Date;

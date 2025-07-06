@@ -21,6 +21,26 @@ export class AIVoiceService {
     });
   }
 
+  /**
+   * Send a prompt to OpenAI and return the assistant's reply as a string.
+   */
+  async sendToOpenAI(prompt: string): Promise<string> {
+    const completion = await this.openai.chat.completions.create({
+      model: 'gpt-3.5-turbo',       // or whichever model you prefer
+      messages: [{ role: 'user', content: prompt }],
+    });
+
+    const text = completion.choices?.[0]?.message?.content?.trim();
+    return text || 'Sorry, I could not generate a response.';
+  }
+
+  /**
+   * Alias used by your controller. Returns exactly what sendToOpenAI returns.
+   */
+  async processPrompt(prompt: string): Promise<string> {
+    return this.sendToOpenAI(prompt);
+  }
+
   async processTextCommand(
     message: string,
     userId: string,
@@ -113,11 +133,10 @@ export class AIVoiceService {
   }
 
   // Clear conversation history
-  clearConversation(conversationId: string): void {
+   clearConversation(conversationId: string): void {
     this.conversations.delete(conversationId);
   }
 
-  // Get all active conversations for a user
   getUserConversations(userId: string): string[] {
     const userConversations: string[] = [];
     for (const [conversationId] of this.conversations) {

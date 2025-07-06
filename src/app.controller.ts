@@ -8,7 +8,7 @@ import {
   Param,
   Delete
 } from '@nestjs/common';
-import { AiVoiceService } from './ai-voice.service';
+import { AIVoiceService } from './ai/ai-voice.service';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ConfigService } from '@nestjs/config';
 import FormData from 'form-data';
@@ -19,7 +19,7 @@ export class AppController {
   private conversations = new Map<string, any[]>();
 
   constructor(private configService: ConfigService,
-    private readonly aiVoiceService: AiVoiceService,
+    private readonly aiVoiceService: AIVoiceService,
   ) {}
 
   // ===== HEALTH & STATUS =====

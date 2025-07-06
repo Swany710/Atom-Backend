@@ -17,13 +17,15 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AppController = void 0;
 const common_1 = require("@nestjs/common");
+const ai_voice_service_1 = require("./ai/ai-voice.service");
 const platform_express_1 = require("@nestjs/platform-express");
 const config_1 = require("@nestjs/config");
 const form_data_1 = __importDefault(require("form-data"));
 const axios_1 = __importDefault(require("axios"));
 let AppController = class AppController {
-    constructor(configService) {
+    constructor(configService, aiVoiceService) {
         this.configService = configService;
+        this.aiVoiceService = aiVoiceService;
         this.conversations = new Map();
     }
     getHealth() {
@@ -185,6 +187,20 @@ let AppController = class AppController {
                 const transcriptionData = whisperResponse.data;
                 transcribedText = transcriptionData.text?.trim() || '';
                 console.log('✅ Transcription successful:', transcribedText.substring(0, 50) + '.');
+                let aiMessage = '';
+                try {
+                    aiMessage = await this.aiVoiceService.processPrompt(transcribedText);
+                }
+                catch (err) {
+                    console.error('AI chat failed:', err);
+                    aiMessage = "Sorry, there was an error generating my response.";
+                }
+                return {
+                    message: aiMessage,
+                    transcription: transcribedText,
+                    mode: 'openai',
+                    timestamp: new Date()
+                };
             }
             catch (transcriptionError) {
                 console.error('❌ Transcription failed:', transcriptionError.response?.data || transcriptionError.message);
@@ -298,6 +314,7 @@ __decorate([
 ], AppController.prototype, "getAllConversations", null);
 exports.AppController = AppController = __decorate([
     (0, common_1.Controller)('api/v1'),
-    __metadata("design:paramtypes", [config_1.ConfigService])
+    __metadata("design:paramtypes", [config_1.ConfigService,
+        ai_voice_service_1.AIVoiceService])
 ], AppController);
 //# sourceMappingURL=app.controller.js.map

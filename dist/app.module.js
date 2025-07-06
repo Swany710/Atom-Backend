@@ -14,6 +14,7 @@ const common_1 = require("@nestjs/common");
 const config_1 = require("@nestjs/config");
 const app_controller_1 = require("./app.controller");
 const app_service_1 = require("./app.service");
+const ai_voice_service_1 = require("./ai/ai-voice.service");
 let AppModule = class AppModule {
     constructor() {
         console.log('✅ Atom App Module loaded - Ready for frontend connection');
@@ -29,7 +30,7 @@ exports.AppModule = AppModule = __decorate([
             }),
         ],
         controllers: [app_controller_1.AppController],
-        providers: [app_service_1.AppService],
+        providers: [app_service_1.AppService, ai_voice_service_1.AIVoiceService],
     }),
     __metadata("design:paramtypes", [])
 ], AppModule);
