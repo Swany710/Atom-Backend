@@ -8,6 +8,7 @@ import {
   Param,
   Delete
 } from '@nestjs/common';
+import { AiVoiceService } from './ai-voice.service';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ConfigService } from '@nestjs/config';
 import FormData from 'form-data';
@@ -17,7 +18,9 @@ import axios from 'axios';
 export class AppController {
   private conversations = new Map<string, any[]>();
 
-  constructor(private configService: ConfigService) {}
+  constructor(private configService: ConfigService,
+    private readonly aiVoiceService: AiVoiceService,
+  ) {}
 
   // ===== HEALTH & STATUS =====
   
@@ -219,8 +222,24 @@ async processVoiceCommand1(@UploadedFile() file: any, @Body() body: any) {
       );
 
       const transcriptionData = whisperResponse.data as any;
-      transcribedText = transcriptionData.text?.trim() || '';
-      console.log('✅ Transcription successful:', transcribedText.substring(0, 50) + '.');
+transcribedText = transcriptionData.text?.trim() || '';
+console.log('✅ Transcription successful:', transcribedText.substring(0, 50) + '.');
+
+let aiMessage = '';
+try {
+  aiMessage = await this.aiVoiceService.processPrompt(transcribedText);
+} catch (err) {
+  console.error('AI chat failed:', err);
+  aiMessage = "Sorry, there was an error generating my response.";
+}
+
+return {
+  message: aiMessage,
+  transcription: transcribedText,
+  mode: 'openai',
+  timestamp: new Date()
+};
+
     } catch (transcriptionError) {
       console.error('❌ Transcription failed:', transcriptionError.response?.data || transcriptionError.message);
       return {
