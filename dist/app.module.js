@@ -15,6 +15,7 @@ const config_1 = require("@nestjs/config");
 const app_controller_1 = require("./app.controller");
 const app_service_1 = require("./app.service");
 const ai_voice_service_1 = require("./ai/ai-voice.service");
+const typeorm_1 = require("@nestjs/typeorm");
 let AppModule = class AppModule {
     constructor() {
         console.log('✅ Atom App Module loaded - Ready for frontend connection');
@@ -27,6 +28,14 @@ exports.AppModule = AppModule = __decorate([
             config_1.ConfigModule.forRoot({
                 isGlobal: true,
                 envFilePath: ['.env'],
+            }),
+            typeorm_1.TypeOrmModule.forRootAsync({
+                useFactory: () => ({
+                    type: 'postgres',
+                    url: process.env.DATABASE_URL,
+                    synchronize: true,
+                    autoLoadEntities: true,
+                }),
             }),
         ],
         controllers: [app_controller_1.AppController],

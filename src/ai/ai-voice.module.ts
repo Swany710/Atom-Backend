@@ -1,11 +1,13 @@
+// src/ai/ai-voice.module.ts
 import { Module } from '@nestjs/common';
-import { AIVoiceController } from './ai-voice.controller';
+import { TypeOrmModule } from '@nestjs/typeorm';
 import { AIVoiceService } from './ai-voice.service';
+import { AIVoiceController } from './ai-voice.controller';
+import { ChatMemory } from './chat-memory.entity';
 
 @Module({
-  imports: [],
-  controllers: [AIVoiceController],
+  imports: [TypeOrmModule.forFeature([ChatMemory])],
   providers: [AIVoiceService],
-  exports: [AIVoiceService],
+  controllers: [AIVoiceController],
 })
 export class AIVoiceModule {}
