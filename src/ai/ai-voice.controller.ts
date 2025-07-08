@@ -94,6 +94,19 @@ export class AIVoiceController {
       );
     }
   }
+  @Post('process')
+  async processVoiceInput(
+    @Body() body: { prompt: string; sessionId: string /* + other fields if needed */ }
+  ): Promise<any> {
+    const { prompt, sessionId } = body;
+    
+    if (!sessionId || !prompt) {
+      throw new BadRequestException('sessionId and prompt are required');
+    }
+
+    const result = await this.aiVoiceService.processPrompt(prompt, sessionId);
+    return { response: result };
+  }
 
   @Post('voice')
   @UseInterceptors(FileInterceptor('audio'))

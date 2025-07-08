@@ -2,8 +2,8 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
-import { AIVoiceService } from './ai/ai-voice.service';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { AIVoiceModule } from './ai/ai-voice.module'; // ✅ Import this module
 
 @Module({
   imports: [
@@ -19,9 +19,10 @@ import { TypeOrmModule } from '@nestjs/typeorm';
         autoLoadEntities: true,
       }),
     }),
+    AIVoiceModule, // ✅ Add this line
   ],
   controllers: [AppController],
-  providers: [AppService, AIVoiceService],
+  providers: [AppService],
 })
 export class AppModule {
   constructor() {

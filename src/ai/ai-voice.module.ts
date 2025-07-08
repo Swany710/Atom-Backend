@@ -9,5 +9,6 @@ import { ChatMemory } from './chat-memory.entity';
   imports: [TypeOrmModule.forFeature([ChatMemory])],
   providers: [AIVoiceService],
   controllers: [AIVoiceController],
+  exports: [AIVoiceService],
 })
 export class AIVoiceModule {}

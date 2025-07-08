@@ -2,7 +2,9 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import OpenAI from 'openai';
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
-
+import { ChatMemory } from './chat-memory.entity';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 // Interfaces
 interface ProcessResult {
   response: string;
@@ -13,11 +15,14 @@ interface ProcessResult {
 @Injectable()
 export class AIVoiceService {
   private openai: OpenAI;
-  private conversations: Map<string, ChatCompletionMessageParam[]> = new Map();
 
-  constructor(private configService: ConfigService) {
+  constructor(
+    private configService: ConfigService,
+    @InjectRepository(ChatMemory)
+    private chatRepo: Repository<ChatMemory>,
+  ) {
     this.openai = new OpenAI({
-      apiKey: this.configService.get('OPENAI_API_KEY'),
+      apiKey: this.configService.get<string>('OPENAI_API_KEY'),
     });
   }
 
@@ -37,56 +42,95 @@ export class AIVoiceService {
   /**
    * Alias used by your controller. Returns exactly what sendToOpenAI returns.
    */
-  async processPrompt(prompt: string): Promise<string> {
-    return this.sendToOpenAI(prompt);
+  async processPrompt(prompt: string, sessionId: string): Promise<string> {
+    // 🧠 Save user message
+    await this.chatRepo.save({ sessionId, role: 'user', content: prompt });
+
+    // 🧠 Get last 10 messages for memory context
+    const memory = await this.chatRepo.find({
+      where: { sessionId },
+      order: { createdAt: 'ASC' },
+      take: 10,
+    });
+ const messages: ChatCompletionMessageParam[] = [
+  {
+    role: 'system',
+    content:
+      'You are Atom, a helpful AI construction assistant. You help with construction projects, planning, and problem-solving. Be concise and practical in your responses.',
+  },
+  ...memory.map((m) =>
+    ({
+      role: m.role as 'user' | 'assistant',
+      content: m.content,
+    } as ChatCompletionMessageParam)
+  ),
+];
+    // 🧠 Call OpenAI
+    const response = await this.openai.chat.completions.create({
+      model: 'gpt-3.5-turbo',
+      messages,
+    });
+
+    const reply = response.choices[0].message.content;
+
+    // 🧠 Save assistant reply
+    await this.chatRepo.save({ sessionId, role: 'assistant', content: reply });
+
+    return reply;
   }
+
 
   async processTextCommand(
-    message: string,
-    userId: string,
-    conversationId?: string
-  ): Promise<ProcessResult> {
-    try {
-      // Use provided conversationId or create a new one
-      const currentConversationId = conversationId || `${userId}-${Date.now()}`;
-      
-      // Get or create conversation history
-      const conversationHistory = this.conversations.get(currentConversationId) || [];
-      
-      // Add user message to history
-      conversationHistory.push({ role: 'user', content: message } as ChatCompletionMessageParam);
-      
-      // Call OpenAI with conversation context
-      const completion = await this.openai.chat.completions.create({
-        model: 'gpt-3.5-turbo',
-        messages: [
-          {
-            role: 'system',
-            content: 'You are Atom, a helpful AI construction assistant. You help with construction projects, planning, and problem-solving. Be concise and practical in your responses.'
-          } as ChatCompletionMessageParam,
-          ...conversationHistory
-        ],
-        max_tokens: 500,
-        temperature: 0.7,
-      });
+  message: string,
+  userId: string,
+  conversationId?: string
+): Promise<ProcessResult> {
+  try {
+    const currentConversationId = conversationId || `${userId}-${Date.now()}`;
 
-      const aiResponse = completion.choices[0]?.message?.content || 'I apologize, but I could not generate a response.';
-      
-      // Add AI response to history
-      conversationHistory.push({ role: 'assistant', content: aiResponse } as ChatCompletionMessageParam);
-      
-      // Store updated conversation (in memory for now)
-      this.conversations.set(currentConversationId, conversationHistory);
+    // Save user message to DB
+    await this.chatRepo.save({ sessionId: currentConversationId, role: 'user', content: message });
 
-      return {
-        response: aiResponse,
-        conversationId: currentConversationId,
-      };
-    } catch (error) {
-      console.error('OpenAI API error:', error);
-      throw new Error('Failed to process text command');
-    }
+    // Retrieve last 10 messages
+    const memory = await this.chatRepo.find({
+      where: { sessionId: currentConversationId },
+      order: { createdAt: 'ASC' },
+      take: 10,
+    });
+
+   const messages: ChatCompletionMessageParam[] = [
+      {
+        role: 'system',
+        content: 'You are Atom, a helpful AI construction assistant. You help with construction projects, planning, and problem-solving. Be concise and practical in your responses.',
+      },
+      ...memory.map((m) => ({
+        role: m.role as 'user' | 'assistant',
+        content: m.content,
+      })),
+    ];
+
+    const completion = await this.openai.chat.completions.create({
+      model: 'gpt-3.5-turbo',
+      messages,
+      max_tokens: 500,
+      temperature: 0.7,
+    });
+
+    const aiResponse = completion.choices[0]?.message?.content || 'I apologize, but I could not generate a response.';
+
+    // Save assistant response to DB
+    await this.chatRepo.save({ sessionId: currentConversationId, role: 'assistant', content: aiResponse });
+
+    return {
+      response: aiResponse,
+      conversationId: currentConversationId,
+    };
+  } catch (error) {
+    console.error('OpenAI API error:', error);
+    throw new Error('Failed to process text command');
   }
+}
+
 
   async processVoiceCommand(
     audioBuffer: Buffer,
@@ -125,25 +169,5 @@ export class AIVoiceService {
       console.error('Transcription error:', error);
       throw new Error('Failed to transcribe audio');
     }
-  }
-
-  // Get conversation history for a specific conversation
-  getConversationHistory(conversationId: string): ChatCompletionMessageParam[] {
-    return this.conversations.get(conversationId) || [];
-  }
-
-  // Clear conversation history
-   clearConversation(conversationId: string): void {
-    this.conversations.delete(conversationId);
-  }
-
-  getUserConversations(userId: string): string[] {
-    const userConversations: string[] = [];
-    for (const [conversationId] of this.conversations) {
-      if (conversationId.startsWith(userId)) {
-        userConversations.push(conversationId);
-      }
-    }
-    return userConversations;
   }
 }

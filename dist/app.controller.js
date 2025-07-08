@@ -189,7 +189,8 @@ let AppController = class AppController {
                 console.log('✅ Transcription successful:', transcribedText.substring(0, 50) + '.');
                 let aiMessage = '';
                 try {
-                    aiMessage = await this.aiVoiceService.processPrompt(transcribedText);
+                    const sessionId = body.userId ?? `anon-${Date.now()}`;
+                    aiMessage = await this.aiVoiceService.processPrompt(transcribedText, sessionId);
                 }
                 catch (err) {
                     console.error('AI chat failed:', err);
