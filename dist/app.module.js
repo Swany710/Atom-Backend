@@ -12,10 +12,11 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.AppModule = void 0;
 const common_1 = require("@nestjs/common");
 const config_1 = require("@nestjs/config");
+const typeorm_1 = require("@nestjs/typeorm");
 const app_controller_1 = require("./app.controller");
 const app_service_1 = require("./app.service");
-const typeorm_1 = require("@nestjs/typeorm");
 const ai_voice_module_1 = require("./ai/ai-voice.module");
+const chat_memory_entity_1 = require("./ai/chat-memory.entity");
 let AppModule = class AppModule {
     constructor() {
         console.log('✅ Atom App Module loaded - Ready for frontend connection');
@@ -37,6 +38,7 @@ exports.AppModule = AppModule = __decorate([
                     autoLoadEntities: true,
                 }),
             }),
+            typeorm_1.TypeOrmModule.forFeature([chat_memory_entity_1.ChatMemory]),
             ai_voice_module_1.AIVoiceModule,
         ],
         controllers: [app_controller_1.AppController],

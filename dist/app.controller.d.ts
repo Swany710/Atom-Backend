@@ -1,10 +1,12 @@
 import { AIVoiceService } from './ai/ai-voice.service';
 import { ConfigService } from '@nestjs/config';
+import { Repository } from 'typeorm';
+import { ChatMemory } from './ai/chat-memory.entity';
 export declare class AppController {
     private configService;
     private readonly aiVoiceService;
-    private conversations;
-    constructor(configService: ConfigService, aiVoiceService: AIVoiceService);
+    private chatRepo;
+    constructor(configService: ConfigService, aiVoiceService: AIVoiceService, chatRepo: Repository<ChatMemory>);
     getHealth(): {
         status: string;
         timestamp: Date;
@@ -16,9 +18,12 @@ export declare class AppController {
         mode: string;
         timestamp: Date;
     };
-    processTextCommand1(body: any): Promise<{
-        message: any;
-        conversationId: any;
+    processTextCommand1(body: {
+        message: string;
+        userId?: string;
+    }): Promise<{
+        message: string;
+        conversationId: string;
         timestamp: Date;
         mode: string;
         error?: undefined;
@@ -29,43 +34,22 @@ export declare class AppController {
         mode: string;
         error: any;
     }>;
-    processVoiceCommand1(file: any, body: any): Promise<{
-        message: string;
-        transcription: string;
+    processVoiceCommand1(file: any, body: any): Promise<void>;
+    getConversation(id: string): Promise<{
         conversationId: string;
-        timestamp: Date;
-        mode: string;
-        error?: undefined;
-    } | {
-        message: string;
-        transcription: string;
-        mode: string;
-        timestamp: Date;
-        conversationId?: undefined;
-        error?: undefined;
-    } | {
-        message: string;
-        transcription: string;
-        conversationId: string;
-        timestamp: Date;
-        mode: string;
-        error: any;
-    }>;
-    getConversation(id: string): {
-        conversationId: string;
-        messages: any[];
+        messages: ChatMemory[];
         messageCount: number;
         timestamp: Date;
-    };
-    clearConversation(id: string): {
+    }>;
+    clearConversation(id: string): Promise<{
         message: string;
         timestamp: Date;
-    };
-    getAllConversations(): {
+    }>;
+    getAllConversations(): Promise<{
         conversations: {
-            id: string;
+            id: any;
             messageCount: number;
             lastMessage: any;
         }[];
-    };
+    }>;
 }

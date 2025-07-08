@@ -1,9 +1,10 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { TypeOrmModule } from '@nestjs/typeorm';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
-import { TypeOrmModule } from '@nestjs/typeorm';
-import { AIVoiceModule } from './ai/ai-voice.module'; // ✅ Import this module
+import { AIVoiceModule } from './ai/ai-voice.module';
+import { ChatMemory } from './ai/chat-memory.entity';
 
 @Module({
   imports: [
@@ -19,7 +20,8 @@ import { AIVoiceModule } from './ai/ai-voice.module'; // ✅ Import this module
         autoLoadEntities: true,
       }),
     }),
-    AIVoiceModule, // ✅ Add this line
+    TypeOrmModule.forFeature([ChatMemory]), // ✅ This enables repo in AppController
+    AIVoiceModule,
   ],
   controllers: [AppController],
   providers: [AppService],
