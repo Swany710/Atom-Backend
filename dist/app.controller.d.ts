@@ -34,7 +34,13 @@ export declare class AppController {
         mode: string;
         error: any;
     }>;
-    processVoiceCommand1(file: any, body: any): Promise<void>;
+    processVoiceCommand1(file: any, body: any): Promise<{
+        message: string;
+        transcription: string;
+        conversationId: any;
+        timestamp: Date;
+        mode: string;
+    }>;
     getConversation(id: string): Promise<{
         conversationId: string;
         messages: ChatMemory[];

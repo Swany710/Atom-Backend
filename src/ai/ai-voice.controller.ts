@@ -13,7 +13,6 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AIVoiceService } from './ai-voice.service';
 
-// Interfaces for request/response
 interface TextCommandRequest {
   message: string;
   userId?: string;
@@ -94,9 +93,10 @@ export class AIVoiceController {
       );
     }
   }
+
   @Post('process')
   async processVoiceInput(
-    @Body() body: { prompt: string; sessionId: string /* + other fields if needed */ }
+    @Body() body: { prompt: string; sessionId: string }
   ): Promise<any> {
     const { prompt, sessionId } = body;
     

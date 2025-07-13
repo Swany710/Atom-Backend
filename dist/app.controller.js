@@ -66,6 +66,39 @@ let AppController = class AppController {
         }
     }
     async processVoiceCommand1(file, body) {
+        try {
+            if (!file || !file.buffer || file.size < 1000) {
+                return {
+                    message: "Audio recording is too short — please speak clearly for at least 1 second.",
+                    transcription: '[Too Short]',
+                    conversationId: `voice-error-${Date.now()}`,
+                    timestamp: new Date(),
+                    mode: 'error',
+                };
+            }
+            const sessionId = body.userId ?? `anon-${Date.now()}`;
+            const buffer = file.buffer;
+            file.originalname = file.originalname || 'audio.mp3';
+            file.mimetype = file.mimetype || 'audio/mpeg';
+            const result = await this.aiVoiceService.processVoiceCommand(buffer, sessionId);
+            return {
+                message: 'Something',
+                transcription: '...',
+                conversationId: sessionId,
+                timestamp: new Date(),
+                mode: 'openai'
+            };
+        }
+        catch (error) {
+            console.error('❌ Voice processing error:', error.message || error);
+            return {
+                message: `Voice processing failed: ${error.message || 'Unknown error'}`,
+                transcription: '[Whisper Error]',
+                conversationId: `voice-error-${Date.now()}`,
+                timestamp: new Date(),
+                mode: 'error',
+            };
+        }
     }
     async getConversation(id) {
         const messages = await this.chatRepo.find({

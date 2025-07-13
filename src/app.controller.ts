@@ -77,9 +77,45 @@ export class AppController {
   @Post('ai/voice-command1')
   @UseInterceptors(FileInterceptor('audio'))
   async processVoiceCommand1(@UploadedFile() file: any, @Body() body: any) {
-    // ... leave this unchanged, you already handled it properly ...
-    // (No in-memory storage here — you're calling aiVoiceService.processPrompt with sessionId)
+    try {
+      if (!file || !file.buffer || file.size < 1000) {
+        return {
+          message: "Audio recording is too short — please speak clearly for at least 1 second.",
+          transcription: '[Too Short]',
+          conversationId: `voice-error-${Date.now()}`,
+          timestamp: new Date(),
+          mode: 'error',
+        };
+      }
+
+      const sessionId = body.userId ?? `anon-${Date.now()}`;
+      const buffer: Buffer = file.buffer;
+
+      // Ensure correct MIME type and name for mp3
+      file.originalname = file.originalname || 'audio.mp3';
+      file.mimetype = file.mimetype || 'audio/mpeg';
+
+      const result = await this.aiVoiceService.processVoiceCommand(buffer, sessionId);
+
+      return {
+        message: 'Something',
+        transcription: '...',
+        conversationId: sessionId,
+        timestamp: new Date(),
+        mode: 'openai'
+      };
+    } catch (error) {
+      console.error('❌ Voice processing error:', error.message || error);
+      return {
+        message: `Voice processing failed: ${error.message || 'Unknown error'}`,
+        transcription: '[Whisper Error]',
+        conversationId: `voice-error-${Date.now()}`,
+        timestamp: new Date(),
+        mode: 'error',
+      };
+    }
   }
+
 
   // ✅ Now reads conversation history from DB
   @Get('ai/conversations/:id')
