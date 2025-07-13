@@ -17,7 +17,6 @@ interface ProcessResult {
   response: string;
   conversationId: string;
   transcription?: string;
-  memory?: ChatCompletionMessageParam[];
 }
 
 @Injectable()
@@ -39,25 +38,32 @@ export class AIVoiceService {
    *  Text helpers
    * ---------------------------------------------------------------- */
   private systemPrompt =
-    'You are Atom, a helpful AI construction assistant. You help with construction projects, planning, and problem-solving. Be concise and practical in your responses.';
+    'You are Atom, a helpful AI construction assistant. Answer the user directly and concisely; if they ask the date, give the date.';
 
-  async processPrompt(prompt: string, sessionId: string): Promise<string> {
-    await this.chatRepo.save({ sessionId, role: 'user', content: prompt });
-
-    const memory = await this.chatRepo.find({
+  /** Core routine for every text prompt (voice and chat) */
+  private async runChatCompletion(
+    sessionId: string,
+    userPrompt: string,
+  ): Promise<string> {
+    /* 1. Fetch the **latest** 10 messages, newest-first, then restore order */
+    const history = await this.chatRepo.find({
       where: { sessionId },
-      order: { createdAt: 'ASC' },
+      order: { createdAt: 'DESC' },
       take: 10,
     });
+    history.reverse(); // oldest → newest
 
+    /* 2. Build message array */
     const messages: ChatCompletionMessageParam[] = [
       { role: 'system', content: this.systemPrompt },
-      ...memory.map((m) => ({
+      ...history.map((m) => ({
         role: m.role as 'user' | 'assistant',
         content: m.content,
       })),
+      { role: 'user', content: userPrompt },
     ];
 
+    /* 3. Hit OpenAI */
     const completion = await this.openai.chat.completions.create({
       model: 'gpt-3.5-turbo',
       messages,
@@ -65,27 +71,29 @@ export class AIVoiceService {
       temperature: 0.7,
     });
 
-    const reply =
+    return (
       completion.choices[0]?.message?.content?.trim() ??
-      'I’m sorry, I could not generate a response.';
-
-    await this.chatRepo.save({ sessionId, role: 'assistant', content: reply });
-    return reply;
+      'I’m sorry, I could not generate a response.'
+    );
   }
 
+  /** Handles a plain-text request */
   async processTextCommand(
     message: string,
     userId: string,
     conversationId?: string,
   ): Promise<ProcessResult> {
-    const currentConversationId = conversationId ?? `${userId}-${Date.now()}`;
+    const sessionId = conversationId ?? `${userId}-${Date.now()}`;
 
-    const response = await this.processPrompt(message, currentConversationId);
+    /* Save the user message AFTER we’ve used it to build the prompt */
+    const reply = await this.runChatCompletion(sessionId, message);
 
-    return {
-      response,
-      conversationId: currentConversationId,
-    };
+    await this.chatRepo.save([
+      { sessionId, role: 'user', content: message },
+      { sessionId, role: 'assistant', content: reply },
+    ]);
+
+    return { response: reply, conversationId: sessionId };
   }
 
   /* ----------------------------------------------------------------
@@ -100,32 +108,25 @@ export class AIVoiceService {
     await writeFile(tmpPath, audioBuffer);
 
     try {
-      // 1) Whisper transcription
-      const { text } = await this.openai.audio.transcriptions.create({
-        file: createReadStream(tmpPath) as any,
-        model: 'whisper-1',
-      });
+      /* 1) Whisper transcription */
+      const { text: transcription } =
+        await this.openai.audio.transcriptions.create({
+          file: createReadStream(tmpPath) as any,
+          model: 'whisper-1',
+        });
 
-      const transcription = text?.trim();
-      if (!transcription) {
+      if (!transcription?.trim()) {
         throw new Error('Transcription returned empty text');
       }
 
-      // 2) Normal text-processing flow (saves memory)
+      /* 2) Reuse text pipeline */
       const result = await this.processTextCommand(
-        transcription,
+        transcription.trim(),
         userId,
         conversationId,
       );
 
-      // 3) Merge and return
-      return {
-        ...result,
-        transcription,
-      };
-    } catch (err) {
-      this.logger.error('Voice command processing error', err);
-      throw new Error('Failed to process voice command');
+      return { ...result, transcription: transcription.trim() };
     } finally {
       await unlink(tmpPath).catch(() =>
         this.logger.warn(`Temp file not removed: ${tmpPath}`),
