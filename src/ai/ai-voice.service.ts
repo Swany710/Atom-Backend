@@ -130,12 +130,9 @@ export class AIVoiceService {
     try {
       this.logger.debug(`Temp file written: ${tempFilePath}`);
 
-      const transcriptionResponse = await this.openai.audio.transcriptions.create({
-        file: createReadStream(tempFilePath) as any,
-        model: 'whisper-1',
-      });
+      const transcription = await this.transcribeAudio(tempFilePath);
 
-      const transcription = transcriptionResponse.text?.trim();
+      this.logger.debug(`Transcription result: ${transcription}`);
 
       if (!transcription) {
         throw new Error('Transcription is empty or failed');
@@ -157,18 +154,16 @@ export class AIVoiceService {
     }
   }
 
-  private async transcribeAudio(audioBuffer: Buffer): Promise<string> {
+  private async transcribeAudio(tempFilePath: string): Promise<string> {
     try {
-      const audioFile = new File([audioBuffer], 'audio.wav', { type: 'audio/wav' });
-
-      const transcription = await this.openai.audio.transcriptions.create({
-        file: audioFile,
+      const response = await this.openai.audio.transcriptions.create({
+        file: createReadStream(tempFilePath) as any,
         model: 'whisper-1',
       });
 
-      return transcription.text || 'Could not transcribe audio';
+      return response.text?.trim() || '';
     } catch (error) {
-      console.error('Transcription error:', error);
+      this.logger.error('Transcription error:', error);
       throw new Error('Failed to transcribe audio');
     }
   }
