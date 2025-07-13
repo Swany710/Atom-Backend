@@ -14,124 +14,74 @@ var __param = (this && this.__param) || function (paramIndex, decorator) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AppController = void 0;
 const common_1 = require("@nestjs/common");
-const ai_voice_service_1 = require("./ai/ai-voice.service");
 const platform_express_1 = require("@nestjs/platform-express");
 const config_1 = require("@nestjs/config");
 const typeorm_1 = require("@nestjs/typeorm");
 const typeorm_2 = require("typeorm");
+const ai_voice_service_1 = require("./ai/ai-voice.service");
 const chat_memory_entity_1 = require("./ai/chat-memory.entity");
 let AppController = class AppController {
-    constructor(configService, aiVoiceService, chatRepo) {
-        this.configService = configService;
-        this.aiVoiceService = aiVoiceService;
+    constructor(config, ai, chatRepo) {
+        this.config = config;
+        this.ai = ai;
         this.chatRepo = chatRepo;
     }
     getHealth() {
         return {
             status: 'healthy',
-            timestamp: new Date(),
             service: 'Atom Backend API',
+            timestamp: new Date(),
         };
     }
     getStatus() {
-        const apiKey = this.configService.get('OPENAI_API_KEY');
-        const isConfigured = !!apiKey && apiKey.startsWith('sk-');
+        const ok = !!this.config.get('OPENAI_API_KEY');
         return {
-            status: isConfigured ? 'available' : 'configuration_error',
-            aiService: isConfigured ? 'online' : 'offline',
-            mode: isConfigured ? 'openai' : 'error',
+            status: ok ? 'available' : 'configuration_error',
+            aiService: ok ? 'online' : 'offline',
+            mode: ok ? 'openai' : 'error',
             timestamp: new Date(),
         };
     }
-    async processTextCommand1(body) {
-        try {
-            const sessionId = body.userId ?? `anon-${Date.now()}`;
-            const aiResponse = await this.aiVoiceService.processPrompt(body.message, sessionId);
-            return {
-                message: aiResponse,
-                conversationId: sessionId,
-                timestamp: new Date(),
-                mode: 'openai',
-            };
-        }
-        catch (error) {
-            console.error('❌ Text processing error:', error.message);
-            return {
-                message: `I'm experiencing technical difficulties: ${error.message}`,
-                conversationId: `error-${Date.now()}`,
-                timestamp: new Date(),
-                mode: 'error',
-                error: error.message,
-            };
-        }
+    async handleText(body) {
+        const sessionId = body.userId ?? `anon-${Date.now()}`;
+        const reply = await this.ai.processPrompt(body.message, sessionId);
+        return {
+            message: reply,
+            conversationId: sessionId,
+            timestamp: new Date(),
+            mode: 'openai',
+        };
     }
-    async processVoiceCommand1(file, body) {
-        try {
-            if (!file || !file.buffer || file.size < 1000) {
-                return {
-                    message: "Audio recording is too short — please speak clearly for at least 1 second.",
-                    transcription: '[Too Short]',
-                    conversationId: `voice-error-${Date.now()}`,
-                    timestamp: new Date(),
-                    mode: 'error',
-                };
-            }
-            const sessionId = body.userId ?? `anon-${Date.now()}`;
-            const buffer = file.buffer;
-            file.originalname = file.originalname || 'audio.mp3';
-            file.mimetype = file.mimetype || 'audio/mpeg';
-            const result = await this.aiVoiceService.processVoiceCommand(buffer, sessionId);
+    async handleVoice(file, body) {
+        if (!file?.buffer || file.size < 1_000) {
             return {
-                message: 'Something',
-                transcription: '...',
-                conversationId: sessionId,
-                timestamp: new Date(),
-                mode: 'openai'
-            };
-        }
-        catch (error) {
-            console.error('❌ Voice processing error:', error.message || error);
-            return {
-                message: `Voice processing failed: ${error.message || 'Unknown error'}`,
-                transcription: '[Whisper Error]',
+                message: 'Audio recording is too short — please speak for at least one second.',
+                transcription: '[Too Short]',
                 conversationId: `voice-error-${Date.now()}`,
                 timestamp: new Date(),
                 mode: 'error',
             };
         }
+        const userId = body.userId ?? `anon-${Date.now()}`;
+        const result = await this.ai.processVoiceCommand(file.buffer, userId);
+        return {
+            message: result.response,
+            transcription: result.transcription,
+            conversationId: result.conversationId,
+            timestamp: new Date(),
+            mode: 'openai',
+        };
     }
     async getConversation(id) {
         const messages = await this.chatRepo.find({
             where: { sessionId: id },
             order: { createdAt: 'ASC' },
         });
-        return {
-            conversationId: id,
-            messages,
-            messageCount: messages.length,
-            timestamp: new Date(),
-        };
+        return { conversationId: id, messages, messageCount: messages.length };
     }
     async clearConversation(id) {
         await this.chatRepo.delete({ sessionId: id });
-        return { message: 'Conversation cleared', timestamp: new Date() };
-    }
-    async getAllConversations() {
-        const results = await this.chatRepo
-            .createQueryBuilder('chat')
-            .select('chat.sessionId', 'id')
-            .addSelect('COUNT(*)', 'messageCount')
-            .addSelect('MAX(chat.createdAt)', 'lastTimestamp')
-            .groupBy('chat.sessionId')
-            .orderBy('lastTimestamp', 'DESC')
-            .getRawMany();
-        return {
-            conversations: results.map((row) => ({
-                id: row.id,
-                messageCount: parseInt(row.messageCount, 10),
-                lastMessage: row.lastTimestamp,
-            })),
-        };
+        return { message: 'Conversation cleared' };
     }
 };
 exports.AppController = AppController;
@@ -153,7 +103,7 @@ __decorate([
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [Object]),
     __metadata("design:returntype", Promise)
-], AppController.prototype, "processTextCommand1", null);
+], AppController.prototype, "handleText", null);
 __decorate([
     (0, common_1.Post)('ai/voice-command1'),
     (0, common_1.UseInterceptors)((0, platform_express_1.FileInterceptor)('audio')),
@@ -162,7 +112,7 @@ __decorate([
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [Object, Object]),
     __metadata("design:returntype", Promise)
-], AppController.prototype, "processVoiceCommand1", null);
+], AppController.prototype, "handleVoice", null);
 __decorate([
     (0, common_1.Get)('ai/conversations/:id'),
     __param(0, (0, common_1.Param)('id')),
@@ -177,12 +127,6 @@ __decorate([
     __metadata("design:paramtypes", [String]),
     __metadata("design:returntype", Promise)
 ], AppController.prototype, "clearConversation", null);
-__decorate([
-    (0, common_1.Get)('ai/conversations'),
-    __metadata("design:type", Function),
-    __metadata("design:paramtypes", []),
-    __metadata("design:returntype", Promise)
-], AppController.prototype, "getAllConversations", null);
 exports.AppController = AppController = __decorate([
     (0, common_1.Controller)('api/v1'),
     __param(2, (0, typeorm_1.InjectRepository)(chat_memory_entity_1.ChatMemory)),

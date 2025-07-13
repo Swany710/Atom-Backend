@@ -1,4 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import OpenAI from 'openai';
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
@@ -19,28 +22,24 @@ interface ProcessResult {
 
 @Injectable()
 export class AIVoiceService {
-  private openai: OpenAI;
+  private readonly openai: OpenAI;
   private readonly logger = new Logger(AIVoiceService.name);
 
   constructor(
-    private configService: ConfigService,
+    private readonly configService: ConfigService,
     @InjectRepository(ChatMemory)
-    private chatRepo: Repository<ChatMemory>,
+    private readonly chatRepo: Repository<ChatMemory>,
   ) {
     this.openai = new OpenAI({
       apiKey: this.configService.get<string>('OPENAI_API_KEY'),
     });
   }
 
-  async sendToOpenAI(prompt: string): Promise<string> {
-    const completion = await this.openai.chat.completions.create({
-      model: 'gpt-3.5-turbo',
-      messages: [{ role: 'user', content: prompt }],
-    });
-
-    const text = completion.choices?.[0]?.message?.content?.trim();
-    return text || 'Sorry, I could not generate a response.';
-  }
+  /* ----------------------------------------------------------------
+   *  Text helpers
+   * ---------------------------------------------------------------- */
+  private systemPrompt =
+    'You are Atom, a helpful AI construction assistant. You help with construction projects, planning, and problem-solving. Be concise and practical in your responses.';
 
   async processPrompt(prompt: string, sessionId: string): Promise<string> {
     await this.chatRepo.save({ sessionId, role: 'user', content: prompt });
@@ -52,119 +51,85 @@ export class AIVoiceService {
     });
 
     const messages: ChatCompletionMessageParam[] = [
-      {
-        role: 'system',
-        content:
-          'You are Atom, a helpful AI construction assistant. You help with construction projects, planning, and problem-solving. Be concise and practical in your responses.',
-      },
-      ...memory.map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+      { role: 'system', content: this.systemPrompt },
+      ...memory.map((m) => ({
+        role: m.role as 'user' | 'assistant',
+        content: m.content,
+      })),
     ];
 
-    const response = await this.openai.chat.completions.create({
+    const completion = await this.openai.chat.completions.create({
       model: 'gpt-3.5-turbo',
       messages,
+      max_tokens: 500,
+      temperature: 0.7,
     });
 
-    const reply = response.choices[0].message.content;
+    const reply =
+      completion.choices[0]?.message?.content?.trim() ??
+      'I’m sorry, I could not generate a response.';
 
     await this.chatRepo.save({ sessionId, role: 'assistant', content: reply });
-
     return reply;
   }
 
   async processTextCommand(
     message: string,
     userId: string,
-    conversationId?: string
+    conversationId?: string,
   ): Promise<ProcessResult> {
-    try {
-      const currentConversationId = conversationId || `${userId}-${Date.now()}`;
+    const currentConversationId = conversationId ?? `${userId}-${Date.now()}`;
 
-      await this.chatRepo.save({ sessionId: currentConversationId, role: 'user', content: message });
+    const response = await this.processPrompt(message, currentConversationId);
 
-      const memory = await this.chatRepo.find({
-        where: { sessionId: currentConversationId },
-        order: { createdAt: 'ASC' },
-        take: 10,
-      });
-
-      const messages: ChatCompletionMessageParam[] = [
-        {
-          role: 'system',
-          content:
-            'You are Atom, a helpful AI construction assistant. You help with construction projects, planning, and problem-solving. Be concise and practical in your responses.',
-        },
-        ...memory.map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
-      ];
-
-      const completion = await this.openai.chat.completions.create({
-        model: 'gpt-3.5-turbo',
-        messages,
-        max_tokens: 500,
-        temperature: 0.7,
-      });
-
-      const aiResponse = completion.choices[0]?.message?.content?.trim() || 'I apologize, but I could not generate a response.';
-
-      await this.chatRepo.save({ sessionId: currentConversationId, role: 'assistant', content: aiResponse });
-
-      return {
-        response: aiResponse,
-        conversationId: currentConversationId,
-        memory: [...messages, { role: 'assistant', content: aiResponse }],
-      };
-    } catch (error) {
-      console.error('OpenAI API error:', error);
-      throw new Error('Failed to process text command');
-    }
+    return {
+      response,
+      conversationId: currentConversationId,
+    };
   }
 
+  /* ----------------------------------------------------------------
+   *  Voice helpers
+   * ---------------------------------------------------------------- */
   async processVoiceCommand(
     audioBuffer: Buffer,
     userId: string,
-    conversationId?: string
+    conversationId?: string,
   ): Promise<ProcessResult> {
-    const tempFilePath = path.join(os.tmpdir(), `voice-${Date.now()}.mp3`);
-    await writeFile(tempFilePath, audioBuffer);
+    const tmpPath = path.join(os.tmpdir(), `voice-${Date.now()}.mp3`);
+    await writeFile(tmpPath, audioBuffer);
 
     try {
-      this.logger.debug(`Temp file written: ${tempFilePath}`);
+      // 1) Whisper transcription
+      const { text } = await this.openai.audio.transcriptions.create({
+        file: createReadStream(tmpPath) as any,
+        model: 'whisper-1',
+      });
 
-      const transcription = await this.transcribeAudio(tempFilePath);
-
-      this.logger.debug(`Transcription result: ${transcription}`);
-
+      const transcription = text?.trim();
       if (!transcription) {
-        throw new Error('Transcription is empty or failed');
+        throw new Error('Transcription returned empty text');
       }
 
-      const result = await this.processTextCommand(transcription, userId, conversationId);
+      // 2) Normal text-processing flow (saves memory)
+      const result = await this.processTextCommand(
+        transcription,
+        userId,
+        conversationId,
+      );
 
+      // 3) Merge and return
       return {
         ...result,
         transcription,
       };
-    } catch (error) {
-      this.logger.error('Voice command processing error:', error);
+    } catch (err) {
+      this.logger.error('Voice command processing error', err);
       throw new Error('Failed to process voice command');
     } finally {
-      await unlink(tempFilePath).catch((e) => {
-        this.logger.warn(`Failed to clean up temp file: ${tempFilePath}`);
-      });
-    }
-  }
-
-  private async transcribeAudio(tempFilePath: string): Promise<string> {
-    try {
-      const response = await this.openai.audio.transcriptions.create({
-        file: createReadStream(tempFilePath) as any,
-        model: 'whisper-1',
-      });
-
-      return response.text?.trim() || '';
-    } catch (error) {
-      this.logger.error('Transcription error:', error);
-      throw new Error('Failed to transcribe audio');
+      await unlink(tmpPath).catch(() =>
+        this.logger.warn(`Temp file not removed: ${tmpPath}`),
+      );
     }
   }
 }
