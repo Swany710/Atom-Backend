@@ -40,12 +40,10 @@ export class AIVoiceService {
   private systemPrompt =
     'You are Atom, a helpful AI construction assistant. Answer the user directly and concisely; if they ask the date, give the date.';
 
-  /** Core routine for every text prompt (voice and chat) */
   private async runChatCompletion(
     sessionId: string,
     userPrompt: string,
   ): Promise<string> {
-    /* 1. Fetch the **latest** 10 messages, newest-first, then restore order */
     const history = await this.chatRepo.find({
       where: { sessionId },
       order: { createdAt: 'DESC' },
@@ -53,7 +51,6 @@ export class AIVoiceService {
     });
     history.reverse(); // oldest → newest
 
-    /* 2. Build message array */
     const messages: ChatCompletionMessageParam[] = [
       { role: 'system', content: this.systemPrompt },
       ...history.map((m) => ({
@@ -63,7 +60,6 @@ export class AIVoiceService {
       { role: 'user', content: userPrompt },
     ];
 
-    /* 3. Hit OpenAI */
     const completion = await this.openai.chat.completions.create({
       model: 'gpt-3.5-turbo',
       messages,
@@ -77,7 +73,6 @@ export class AIVoiceService {
     );
   }
 
-  /** Handles a plain-text request */
   async processTextCommand(
     message: string,
     userId: string,
@@ -85,7 +80,6 @@ export class AIVoiceService {
   ): Promise<ProcessResult> {
     const sessionId = conversationId ?? `${userId}-${Date.now()}`;
 
-    /* Save the user message AFTER we’ve used it to build the prompt */
     const reply = await this.runChatCompletion(sessionId, message);
 
     await this.chatRepo.save([
@@ -94,6 +88,16 @@ export class AIVoiceService {
     ]);
 
     return { response: reply, conversationId: sessionId };
+  }
+
+  /** Back-compat helper for controllers still calling `processPrompt` */
+  async processPrompt(prompt: string, sessionId: string): Promise<string> {
+    const { response } = await this.processTextCommand(
+      prompt,
+      sessionId,
+      sessionId,
+    );
+    return response;
   }
 
   /* ----------------------------------------------------------------
@@ -108,7 +112,6 @@ export class AIVoiceService {
     await writeFile(tmpPath, audioBuffer);
 
     try {
-      /* 1) Whisper transcription */
       const { text: transcription } =
         await this.openai.audio.transcriptions.create({
           file: createReadStream(tmpPath) as any,
@@ -119,7 +122,6 @@ export class AIVoiceService {
         throw new Error('Transcription returned empty text');
       }
 
-      /* 2) Reuse text pipeline */
       const result = await this.processTextCommand(
         transcription.trim(),
         userId,
