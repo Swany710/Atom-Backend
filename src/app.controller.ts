@@ -19,7 +19,7 @@ import { ChatMemory } from './ai/chat-memory.entity';
 export class AppController {
   constructor(
     private readonly config: ConfigService,
-    private readonly ai: AIVoiceService,
+    private readonly aiVoiceService: AIVoiceService,
     @InjectRepository(ChatMemory)
     private readonly chatRepo: Repository<ChatMemory>,
   ) {}
@@ -42,7 +42,6 @@ export class AppController {
     return {
       status: ok ? 'available' : 'configuration_error',
       aiService: ok ? 'online' : 'offline',
-      mode: ok ? 'openai' : 'error',
       timestamp: new Date(),
     };
   }
@@ -51,9 +50,14 @@ export class AppController {
   /*  Text                                                     */
   /* --------------------------------------------------------- */
   @Post('ai/text-command1')
-  async handleText(@Body() body: { message: string; userId?: string }) {
-    const sessionId = body.userId ?? `anon-${Date.now()}`;
-    const reply = await this.ai.processPrompt(body.message, sessionId);
+  async handleText(
+    @Body() body: { message: string; userId?: string; conversationId?: string },
+  ) {
+    const sessionId = body.conversationId ?? body.userId ?? 'default-user';
+    const reply = await this.aiVoiceService.processPrompt(
+      body.message,
+      sessionId,
+    );
 
     return {
       message: reply,
@@ -70,26 +74,32 @@ export class AppController {
   @UseInterceptors(FileInterceptor('audio'))
   async handleVoice(
     @UploadedFile() file: Express.Multer.File,
-    @Body() body: { userId?: string },
+    @Body() body: { userId?: string; conversationId?: string },
   ) {
     if (!file?.buffer || file.size < 1_000) {
       return {
         message:
           'Audio recording is too short — please speak for at least one second.',
         transcription: '[Too Short]',
-        conversationId: `voice-error-${Date.now()}`,
+        conversationId: body.conversationId ?? body.userId ?? 'voice-error',
         timestamp: new Date(),
         mode: 'error',
       };
     }
 
-    const userId = body.userId ?? `anon-${Date.now()}`;
-    const result = await this.ai.processVoiceCommand(file.buffer, userId);
+    const userId = body.userId ?? 'default-user';
+    const convoId = body.conversationId ?? userId; // 🔑  keep entire voice thread
+
+    const result = await this.aiVoiceService.processVoiceCommand(
+      file.buffer,
+      userId,
+      convoId,
+    );
 
     return {
       message: result.response,
       transcription: result.transcription,
-      conversationId: result.conversationId,
+      conversationId: result.conversationId, // same as convoId
       timestamp: new Date(),
       mode: 'openai',
     };
@@ -110,6 +120,6 @@ export class AppController {
   @Delete('ai/conversations/:id')
   async clearConversation(@Param('id') id: string) {
     await this.chatRepo.delete({ sessionId: id });
-    return { message: 'Conversation cleared' };
+    return { message: 'Conversation cleared', conversationId: id };
   }
 }

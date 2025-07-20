@@ -21,9 +21,9 @@ const typeorm_2 = require("typeorm");
 const ai_voice_service_1 = require("./ai/ai-voice.service");
 const chat_memory_entity_1 = require("./ai/chat-memory.entity");
 let AppController = class AppController {
-    constructor(config, ai, chatRepo) {
+    constructor(config, aiVoiceService, chatRepo) {
         this.config = config;
-        this.ai = ai;
+        this.aiVoiceService = aiVoiceService;
         this.chatRepo = chatRepo;
     }
     getHealth() {
@@ -38,13 +38,12 @@ let AppController = class AppController {
         return {
             status: ok ? 'available' : 'configuration_error',
             aiService: ok ? 'online' : 'offline',
-            mode: ok ? 'openai' : 'error',
             timestamp: new Date(),
         };
     }
     async handleText(body) {
-        const sessionId = body.userId ?? `anon-${Date.now()}`;
-        const reply = await this.ai.processPrompt(body.message, sessionId);
+        const sessionId = body.conversationId ?? body.userId ?? 'default-user';
+        const reply = await this.aiVoiceService.processPrompt(body.message, sessionId);
         return {
             message: reply,
             conversationId: sessionId,
@@ -57,13 +56,14 @@ let AppController = class AppController {
             return {
                 message: 'Audio recording is too short — please speak for at least one second.',
                 transcription: '[Too Short]',
-                conversationId: `voice-error-${Date.now()}`,
+                conversationId: body.conversationId ?? body.userId ?? 'voice-error',
                 timestamp: new Date(),
                 mode: 'error',
             };
         }
-        const userId = body.userId ?? `anon-${Date.now()}`;
-        const result = await this.ai.processVoiceCommand(file.buffer, userId);
+        const userId = body.userId ?? 'default-user';
+        const convoId = body.conversationId ?? userId;
+        const result = await this.aiVoiceService.processVoiceCommand(file.buffer, userId, convoId);
         return {
             message: result.response,
             transcription: result.transcription,
@@ -81,7 +81,7 @@ let AppController = class AppController {
     }
     async clearConversation(id) {
         await this.chatRepo.delete({ sessionId: id });
-        return { message: 'Conversation cleared' };
+        return { message: 'Conversation cleared', conversationId: id };
     }
 };
 exports.AppController = AppController;

@@ -1,13 +1,10 @@
-import {
-  Injectable,
-  Logger,
-} from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import OpenAI from 'openai';
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
-import { ChatMemory } from './chat-memory.entity';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { ChatMemory } from './chat-memory.entity';
 import * as path from 'path';
 import * as os from 'os';
 import { writeFile, unlink } from 'fs/promises';
@@ -25,21 +22,22 @@ export class AIVoiceService {
   private readonly logger = new Logger(AIVoiceService.name);
 
   constructor(
-    private readonly configService: ConfigService,
+    private readonly config: ConfigService,
     @InjectRepository(ChatMemory)
     private readonly chatRepo: Repository<ChatMemory>,
   ) {
     this.openai = new OpenAI({
-      apiKey: this.configService.get<string>('OPENAI_API_KEY'),
+      apiKey: this.config.get<string>('OPENAI_API_KEY'),
     });
   }
 
-  /* ----------------------------------------------------------------
-   *  Text helpers
-   * ---------------------------------------------------------------- */
-  private systemPrompt =
-    'You are Atom, a helpful AI construction assistant. Answer the user directly and concisely; if they ask the date, give the date.';
+  /* ---------------------------------------------------------------------
+   *  Chat helpers
+   * ------------------------------------------------------------------- */
+  private readonly systemPrompt =
+    'You are Atom, a helpful AI construction assistant. Answer clearly and concisely; include today’s date when asked.';
 
+  /** Build a message array (last-10 turns) and call OpenAI */
   private async runChatCompletion(
     sessionId: string,
     userPrompt: string,
@@ -73,12 +71,16 @@ export class AIVoiceService {
     );
   }
 
+  /* ---------------------------------------------------------------------
+   *  Public text pipeline
+   * ------------------------------------------------------------------- */
   async processTextCommand(
     message: string,
     userId: string,
     conversationId?: string,
   ): Promise<ProcessResult> {
-    const sessionId = conversationId ?? `${userId}-${Date.now()}`;
+    /** 🔑  Use one stable ID for the whole thread */
+    const sessionId = conversationId ?? userId;
 
     const reply = await this.runChatCompletion(sessionId, message);
 
@@ -90,7 +92,7 @@ export class AIVoiceService {
     return { response: reply, conversationId: sessionId };
   }
 
-  /** Back-compat helper for controllers still calling `processPrompt` */
+  /** Back-compat helper for controllers that still invoke `processPrompt` */
   async processPrompt(prompt: string, sessionId: string): Promise<string> {
     const { response } = await this.processTextCommand(
       prompt,
@@ -100,9 +102,9 @@ export class AIVoiceService {
     return response;
   }
 
-  /* ----------------------------------------------------------------
-   *  Voice helpers
-   * ---------------------------------------------------------------- */
+  /* ---------------------------------------------------------------------
+   *  Voice pipeline
+   * ------------------------------------------------------------------- */
   async processVoiceCommand(
     audioBuffer: Buffer,
     userId: string,
@@ -112,23 +114,23 @@ export class AIVoiceService {
     await writeFile(tmpPath, audioBuffer);
 
     try {
-      const { text: transcription } =
-        await this.openai.audio.transcriptions.create({
-          file: createReadStream(tmpPath) as any,
-          model: 'whisper-1',
-        });
+      // 1) Whisper transcription
+      const { text } = await this.openai.audio.transcriptions.create({
+        file: createReadStream(tmpPath) as any,
+        model: 'whisper-1',
+      });
+      const transcription = text?.trim();
+      if (!transcription) throw new Error('Transcription returned empty text');
 
-      if (!transcription?.trim()) {
-        throw new Error('Transcription returned empty text');
-      }
-
+      // 2) Reuse text pipeline (same session ID ⇒ full memory)
       const result = await this.processTextCommand(
-        transcription.trim(),
+        transcription,
         userId,
-        conversationId,
+        conversationId ?? userId,
       );
 
-      return { ...result, transcription: transcription.trim() };
+      // 3) Return combined payload
+      return { ...result, transcription };
     } finally {
       await unlink(tmpPath).catch(() =>
         this.logger.warn(`Temp file not removed: ${tmpPath}`),

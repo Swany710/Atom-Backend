@@ -4,9 +4,9 @@ import { AIVoiceService } from './ai/ai-voice.service';
 import { ChatMemory } from './ai/chat-memory.entity';
 export declare class AppController {
     private readonly config;
-    private readonly ai;
+    private readonly aiVoiceService;
     private readonly chatRepo;
-    constructor(config: ConfigService, ai: AIVoiceService, chatRepo: Repository<ChatMemory>);
+    constructor(config: ConfigService, aiVoiceService: AIVoiceService, chatRepo: Repository<ChatMemory>);
     getHealth(): {
         status: string;
         service: string;
@@ -15,12 +15,12 @@ export declare class AppController {
     getStatus(): {
         status: string;
         aiService: string;
-        mode: string;
         timestamp: Date;
     };
     handleText(body: {
         message: string;
         userId?: string;
+        conversationId?: string;
     }): Promise<{
         message: string;
         conversationId: string;
@@ -29,6 +29,7 @@ export declare class AppController {
     }>;
     handleVoice(file: Express.Multer.File, body: {
         userId?: string;
+        conversationId?: string;
     }): Promise<{
         message: string;
         transcription: string;
@@ -43,5 +44,6 @@ export declare class AppController {
     }>;
     clearConversation(id: string): Promise<{
         message: string;
+        conversationId: string;
     }>;
 }
