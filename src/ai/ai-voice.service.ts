@@ -59,7 +59,7 @@ export class AIVoiceService {
     ];
 
     const completion = await this.openai.chat.completions.create({
-      model: 'gpt-3.5-turbo',
+      model: 'gpt-4.1-mini',
       messages,
       max_tokens: 500,
       temperature: 0.7,
