@@ -9,6 +9,8 @@ import type {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ChatMemory } from './chat-memory.entity';
+import { CalendarService } from '../integrations/calendar/calendar.service';
+import { EmailService } from '../integrations/email/email.service';
 import * as path from 'path';
 import * as os from 'os';
 import { writeFile, unlink } from 'fs/promises';
@@ -30,6 +32,8 @@ export class AIVoiceService {
     private readonly config: ConfigService,
     @InjectRepository(ChatMemory)
     private readonly chatRepo: Repository<ChatMemory>,
+    private readonly calendarService: CalendarService,
+    private readonly emailService: EmailService,
   ) {
     this.openai = new OpenAI({
       apiKey: this.config.get<string>('OPENAI_API_KEY'),
@@ -396,35 +400,35 @@ export class AIVoiceService {
     searchQuery?: string,
     sessionId?: string,
   ): Promise<any> {
-    this.logger.log(`[STUB] Checking calendar: ${startDate} to ${endDate}`);
-    // TODO: Implement Google Calendar / Outlook integration
-    return {
-      events: [],
-      message: 'Calendar integration not yet implemented. This is a placeholder response.',
-      startDate,
-      endDate,
-    };
+    this.logger.log(`Checking calendar: ${startDate} to ${endDate}`);
+    return this.calendarService.checkCalendar(startDate, endDate, searchQuery, sessionId);
   }
 
   private async createCalendarEvent(args: any, sessionId?: string): Promise<any> {
-    this.logger.log(`[STUB] Creating calendar event: ${args.title}`);
-    // TODO: Implement Google Calendar / Outlook event creation
-    return {
-      success: false,
-      message: 'Calendar integration not yet implemented. This is a placeholder response.',
-      event: args,
-    };
+    this.logger.log(`Creating calendar event: ${args.title}`);
+    return this.calendarService.createCalendarEvent(
+      args.title,
+      args.start_time,
+      args.end_time,
+      args.description,
+      args.attendees,
+      args.location,
+      sessionId,
+    );
   }
 
   private async sendEmail(args: any, sessionId?: string): Promise<any> {
-    this.logger.log(`[STUB] Sending email to: ${args.to.join(', ')}`);
-    // TODO: Implement Gmail API / Outlook API
-    return {
-      success: false,
-      message: 'Email integration not yet implemented. This is a placeholder response.',
-      draft_created: args.draft_only || false,
-      email: args,
-    };
+    this.logger.log(`Sending email to: ${args.to.join(', ')}`);
+    return this.emailService.sendEmail(
+      args.to,
+      args.subject,
+      args.body,
+      args.draft_only || false,
+      args.cc,
+      args.bcc,
+      args.html,
+      sessionId,
+    );
   }
 
   private async updateCRM(
