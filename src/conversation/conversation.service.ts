@@ -1,7 +1,7 @@
  // src/conversation/conversation.service.ts
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, MoreThan } from 'typeorm';
+import { Repository, MoreThan, LessThan } from 'typeorm';
 import { Conversation } from './entities/conversation.entity';
 import { ConversationMessage, MessageRole, MessageType } from './entities/conversation-message.entity';
 import { UserConversationSettings } from './entities/user-conversation-settings.entity';
@@ -205,7 +205,7 @@ export class ConversationService {
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
     const result = await this.conversationRepo.update(
-      { updatedAt: MoreThan(thirtyDaysAgo), isActive: false },
+      { updatedAt: LessThan(thirtyDaysAgo), isActive: true },
       { isActive: false }
     );
 
