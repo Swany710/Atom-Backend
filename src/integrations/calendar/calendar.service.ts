@@ -1,7 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { google } from 'googleapis';
-import { OAuth2Client } from 'google-auth-library';
+import { Client } from '@microsoft/microsoft-graph-client';
+import { ClientSecretCredential } from '@azure/identity';
+import 'isomorphic-fetch';
 
 export interface CalendarEvent {
   id?: string;
@@ -32,51 +33,47 @@ export interface CreateEventResult {
 @Injectable()
 export class CalendarService {
   private readonly logger = new Logger(CalendarService.name);
-  private calendar: any;
-  private oauth2Client: OAuth2Client;
+  private graphClient: Client;
 
   constructor(private readonly config: ConfigService) {
-    this.initializeGoogleCalendar();
+    this.initializeMicrosoftGraph();
   }
 
   /**
-   * Initialize Google Calendar API client
-   * Supports both OAuth 2.0 and Service Account authentication
+   * Initialize Microsoft Graph API client
+   * Uses Azure AD OAuth 2.0 with client credentials or delegated permissions
    */
-  private initializeGoogleCalendar() {
+  private initializeMicrosoftGraph() {
     try {
-      const clientId = this.config.get<string>('GOOGLE_CLIENT_ID');
-      const clientSecret = this.config.get<string>('GOOGLE_CLIENT_SECRET');
-      const refreshToken = this.config.get<string>('GOOGLE_REFRESH_TOKEN');
+      const tenantId = this.config.get<string>('MICROSOFT_TENANT_ID');
+      const clientId = this.config.get<string>('MICROSOFT_CLIENT_ID');
+      const clientSecret = this.config.get<string>('MICROSOFT_CLIENT_SECRET');
 
-      if (!clientId || !clientSecret) {
-        this.logger.warn('Google Calendar credentials not configured. Calendar features will be disabled.');
+      if (!tenantId || !clientId || !clientSecret) {
+        this.logger.warn('Microsoft Calendar credentials not configured. Calendar features will be disabled.');
         return;
       }
 
-      // Initialize OAuth2 client
-      this.oauth2Client = new google.auth.OAuth2(
+      // Create credential for app-only authentication
+      const credential = new ClientSecretCredential(
+        tenantId,
         clientId,
-        clientSecret,
-        'http://localhost:3000/auth/google/callback' // Redirect URI
+        clientSecret
       );
 
-      // Set refresh token if available
-      if (refreshToken) {
-        this.oauth2Client.setCredentials({
-          refresh_token: refreshToken,
-        });
-      }
-
-      // Initialize Calendar API
-      this.calendar = google.calendar({
-        version: 'v3',
-        auth: this.oauth2Client,
+      // Initialize Graph client
+      this.graphClient = Client.initWithMiddleware({
+        authProvider: {
+          getAccessToken: async () => {
+            const token = await credential.getToken('https://graph.microsoft.com/.default');
+            return token.token;
+          },
+        },
       });
 
-      this.logger.log('Google Calendar API initialized successfully');
+      this.logger.log('Microsoft Graph API (Calendar) initialized successfully');
     } catch (error) {
-      this.logger.error('Failed to initialize Google Calendar API:', error);
+      this.logger.error('Failed to initialize Microsoft Graph API:', error);
     }
   }
 
@@ -89,10 +86,10 @@ export class CalendarService {
     searchQuery?: string,
     userId?: string,
   ): Promise<CheckCalendarResult> {
-    if (!this.calendar) {
+    if (!this.graphClient) {
       return {
         success: false,
-        error: 'Calendar API not initialized. Please configure Google credentials.',
+        error: 'Calendar API not initialized. Please configure Microsoft credentials.',
       };
     }
 
@@ -103,29 +100,39 @@ export class CalendarService {
       const timeMin = new Date(startDate).toISOString();
       const timeMax = endDate
         ? new Date(endDate).toISOString()
-        : new Date(new Date(startDate).getTime() + 24 * 60 * 60 * 1000).toISOString(); // +1 day
+        : new Date(new Date(startDate).getTime() + 24 * 60 * 60 * 1000).toISOString();
 
-      const response = await this.calendar.events.list({
-        calendarId: 'primary',
-        timeMin,
-        timeMax,
-        singleEvents: true,
-        orderBy: 'startTime',
-        q: searchQuery, // Search term
-        maxResults: 50,
-      });
+      // Build filter query
+      let filter = `start/dateTime ge '${timeMin}' and end/dateTime le '${timeMax}'`;
 
-      const items = response.data.items || [];
+      // Get user ID from config or use default
+      const userPrincipalName = userId || this.config.get<string>('MICROSOFT_USER_EMAIL');
+
+      // Fetch calendar events
+      let request = this.graphClient
+        .api(`/users/${userPrincipalName}/calendar/events`)
+        .filter(filter)
+        .orderby('start/dateTime')
+        .top(50)
+        .select('subject,start,end,location,attendees,onlineMeetingUrl,bodyPreview,id');
+
+      // Add search if provided
+      if (searchQuery) {
+        request = request.search(`"${searchQuery}"`);
+      }
+
+      const response = await request.get();
+      const items = response.value || [];
 
       const events: CalendarEvent[] = items.map((event: any) => ({
         id: event.id,
-        title: event.summary || 'Untitled Event',
-        start: event.start?.dateTime || event.start?.date,
-        end: event.end?.dateTime || event.end?.date,
-        description: event.description,
-        location: event.location,
-        attendees: event.attendees?.map((a: any) => a.email) || [],
-        meetLink: event.hangoutLink || event.conferenceData?.entryPoints?.[0]?.uri,
+        title: event.subject || 'Untitled Event',
+        start: event.start?.dateTime,
+        end: event.end?.dateTime,
+        description: event.bodyPreview,
+        location: event.location?.displayName,
+        attendees: event.attendees?.map((a: any) => a.emailAddress.address) || [],
+        meetLink: event.onlineMeetingUrl,
       }));
 
       this.logger.log(`Found ${events.length} calendar events`);
@@ -159,65 +166,62 @@ export class CalendarService {
     location?: string,
     userId?: string,
   ): Promise<CreateEventResult> {
-    if (!this.calendar) {
+    if (!this.graphClient) {
       return {
         success: false,
-        error: 'Calendar API not initialized. Please configure Google credentials.',
+        error: 'Calendar API not initialized. Please configure Microsoft credentials.',
       };
     }
 
     try {
       this.logger.log(`Creating calendar event: ${title}`);
 
+      const userPrincipalName = userId || this.config.get<string>('MICROSOFT_USER_EMAIL');
+
       const event = {
-        summary: title,
-        description,
-        location,
+        subject: title,
+        body: {
+          contentType: 'text',
+          content: description || '',
+        },
         start: {
           dateTime: new Date(startTime).toISOString(),
-          timeZone: 'America/New_York', // TODO: Make configurable per user
+          timeZone: 'UTC',
         },
         end: {
           dateTime: new Date(endTime).toISOString(),
-          timeZone: 'America/New_York',
+          timeZone: 'UTC',
         },
-        attendees: attendees?.map(email => ({ email })),
-        reminders: {
-          useDefault: true,
-        },
-        // Enable Google Meet for the event
-        conferenceData: {
-          createRequest: {
-            requestId: `meet-${Date.now()}`,
-            conferenceSolutionKey: { type: 'hangoutsMeet' },
-          },
-        },
+        location: location ? {
+          displayName: location,
+        } : undefined,
+        attendees: attendees?.map(email => ({
+          emailAddress: { address: email },
+          type: 'required',
+        })),
+        isOnlineMeeting: true, // Enable Teams meeting
+        onlineMeetingProvider: 'teamsForBusiness',
       };
 
-      const response = await this.calendar.events.insert({
-        calendarId: 'primary',
-        resource: event,
-        conferenceDataVersion: 1, // Enable conference data
-        sendUpdates: attendees && attendees.length > 0 ? 'all' : 'none',
-      });
+      const response = await this.graphClient
+        .api(`/users/${userPrincipalName}/calendar/events`)
+        .post(event);
 
-      const createdEvent = response.data;
-
-      this.logger.log(`Calendar event created successfully: ${createdEvent.id}`);
+      this.logger.log(`Calendar event created successfully: ${response.id}`);
 
       return {
         success: true,
         event: {
-          id: createdEvent.id,
-          title: createdEvent.summary,
-          start: createdEvent.start?.dateTime || createdEvent.start?.date,
-          end: createdEvent.end?.dateTime || createdEvent.end?.date,
-          description: createdEvent.description,
-          location: createdEvent.location,
-          attendees: createdEvent.attendees?.map((a: any) => a.email) || [],
-          meetLink: createdEvent.hangoutLink,
+          id: response.id,
+          title: response.subject,
+          start: response.start?.dateTime,
+          end: response.end?.dateTime,
+          description: response.bodyPreview,
+          location: response.location?.displayName,
+          attendees: response.attendees?.map((a: any) => a.emailAddress.address) || [],
+          meetLink: response.onlineMeetingUrl,
         },
-        message: `Event "${title}" created successfully`,
+        message: `Event "${title}" created successfully with Teams meeting link`,
       };
     } catch (error) {
       this.logger.error('Error creating calendar event:', error);
@@ -236,56 +240,66 @@ export class CalendarService {
     updates: Partial<CalendarEvent>,
     userId?: string,
   ): Promise<CreateEventResult> {
-    if (!this.calendar) {
+    if (!this.graphClient) {
       return {
         success: false,
-        error: 'Calendar API not initialized. Please configure Google credentials.',
+        error: 'Calendar API not initialized. Please configure Microsoft credentials.',
       };
     }
 
     try {
       this.logger.log(`Updating calendar event: ${eventId}`);
 
+      const userPrincipalName = userId || this.config.get<string>('MICROSOFT_USER_EMAIL');
+
       // Build update object
       const updateData: any = {};
-      if (updates.title) updateData.summary = updates.title;
-      if (updates.description) updateData.description = updates.description;
-      if (updates.location) updateData.location = updates.location;
+      if (updates.title) updateData.subject = updates.title;
+      if (updates.description) {
+        updateData.body = {
+          contentType: 'text',
+          content: updates.description,
+        };
+      }
+      if (updates.location) {
+        updateData.location = {
+          displayName: updates.location,
+        };
+      }
       if (updates.start) {
         updateData.start = {
           dateTime: new Date(updates.start).toISOString(),
-          timeZone: 'America/New_York',
+          timeZone: 'UTC',
         };
       }
       if (updates.end) {
         updateData.end = {
           dateTime: new Date(updates.end).toISOString(),
-          timeZone: 'America/New_York',
+          timeZone: 'UTC',
         };
       }
       if (updates.attendees) {
-        updateData.attendees = updates.attendees.map(email => ({ email }));
+        updateData.attendees = updates.attendees.map(email => ({
+          emailAddress: { address: email },
+          type: 'required',
+        }));
       }
 
-      const response = await this.calendar.events.patch({
-        calendarId: 'primary',
-        eventId,
-        resource: updateData,
-        sendUpdates: updates.attendees ? 'all' : 'none',
-      });
-
-      const updatedEvent = response.data;
+      const response = await this.graphClient
+        .api(`/users/${userPrincipalName}/calendar/events/${eventId}`)
+        .patch(updateData);
 
       return {
         success: true,
         event: {
-          id: updatedEvent.id,
-          title: updatedEvent.summary,
-          start: updatedEvent.start?.dateTime || updatedEvent.start?.date,
-          end: updatedEvent.end?.dateTime || updatedEvent.end?.date,
-          description: updatedEvent.description,
-          location: updatedEvent.location,
-          attendees: updatedEvent.attendees?.map((a: any) => a.email) || [],
+          id: response.id,
+          title: response.subject,
+          start: response.start?.dateTime,
+          end: response.end?.dateTime,
+          description: response.bodyPreview,
+          location: response.location?.displayName,
+          attendees: response.attendees?.map((a: any) => a.emailAddress.address) || [],
+          meetLink: response.onlineMeetingUrl,
         },
         message: 'Event updated successfully',
       };
@@ -301,22 +315,25 @@ export class CalendarService {
   /**
    * Delete a calendar event
    */
-  async deleteCalendarEvent(eventId: string, userId?: string): Promise<{ success: boolean; message?: string; error?: string }> {
-    if (!this.calendar) {
+  async deleteCalendarEvent(
+    eventId: string,
+    userId?: string,
+  ): Promise<{ success: boolean; message?: string; error?: string }> {
+    if (!this.graphClient) {
       return {
         success: false,
-        error: 'Calendar API not initialized. Please configure Google credentials.',
+        error: 'Calendar API not initialized. Please configure Microsoft credentials.',
       };
     }
 
     try {
       this.logger.log(`Deleting calendar event: ${eventId}`);
 
-      await this.calendar.events.delete({
-        calendarId: 'primary',
-        eventId,
-        sendUpdates: 'all',
-      });
+      const userPrincipalName = userId || this.config.get<string>('MICROSOFT_USER_EMAIL');
+
+      await this.graphClient
+        .api(`/users/${userPrincipalName}/calendar/events/${eventId}`)
+        .delete();
 
       return {
         success: true,
@@ -327,48 +344,6 @@ export class CalendarService {
       return {
         success: false,
         error: error.message || 'Failed to delete calendar event',
-      };
-    }
-  }
-
-  /**
-   * Get authorization URL for OAuth flow
-   * Use this to get user consent for calendar access
-   */
-  getAuthUrl(): string {
-    const scopes = [
-      'https://www.googleapis.com/auth/calendar',
-      'https://www.googleapis.com/auth/calendar.events',
-    ];
-
-    return this.oauth2Client.generateAuthUrl({
-      access_type: 'offline',
-      scope: scopes,
-      prompt: 'consent', // Force to get refresh token
-    });
-  }
-
-  /**
-   * Exchange authorization code for tokens
-   */
-  async handleAuthCallback(code: string): Promise<{ success: boolean; tokens?: any; error?: string }> {
-    try {
-      const { tokens } = await this.oauth2Client.getToken(code);
-      this.oauth2Client.setCredentials(tokens);
-
-      this.logger.log('Successfully obtained Google Calendar tokens');
-      this.logger.log('IMPORTANT: Save this refresh token to your .env file:');
-      this.logger.log(`GOOGLE_REFRESH_TOKEN=${tokens.refresh_token}`);
-
-      return {
-        success: true,
-        tokens,
-      };
-    } catch (error) {
-      this.logger.error('Error handling auth callback:', error);
-      return {
-        success: false,
-        error: error.message || 'Failed to exchange auth code',
       };
     }
   }

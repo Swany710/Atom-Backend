@@ -1,7 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { google } from 'googleapis';
-import { OAuth2Client } from 'google-auth-library';
+import { Client } from '@microsoft/microsoft-graph-client';
+import { ClientSecretCredential } from '@azure/identity';
+import 'isomorphic-fetch';
 
 export interface EmailMessage {
   id?: string;
@@ -36,50 +37,46 @@ export interface ReadEmailsResult {
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
-  private gmail: any;
-  private oauth2Client: OAuth2Client;
+  private graphClient: Client;
 
   constructor(private readonly config: ConfigService) {
-    this.initializeGmail();
+    this.initializeMicrosoftGraph();
   }
 
   /**
-   * Initialize Gmail API client
+   * Initialize Microsoft Graph API client
    */
-  private initializeGmail() {
+  private initializeMicrosoftGraph() {
     try {
-      const clientId = this.config.get<string>('GOOGLE_CLIENT_ID');
-      const clientSecret = this.config.get<string>('GOOGLE_CLIENT_SECRET');
-      const refreshToken = this.config.get<string>('GOOGLE_REFRESH_TOKEN');
+      const tenantId = this.config.get<string>('MICROSOFT_TENANT_ID');
+      const clientId = this.config.get<string>('MICROSOFT_CLIENT_ID');
+      const clientSecret = this.config.get<string>('MICROSOFT_CLIENT_SECRET');
 
-      if (!clientId || !clientSecret) {
-        this.logger.warn('Gmail credentials not configured. Email features will be disabled.');
+      if (!tenantId || !clientId || !clientSecret) {
+        this.logger.warn('Microsoft Outlook credentials not configured. Email features will be disabled.');
         return;
       }
 
-      // Initialize OAuth2 client
-      this.oauth2Client = new google.auth.OAuth2(
+      // Create credential for app-only authentication
+      const credential = new ClientSecretCredential(
+        tenantId,
         clientId,
-        clientSecret,
-        'http://localhost:3000/auth/google/callback'
+        clientSecret
       );
 
-      // Set refresh token if available
-      if (refreshToken) {
-        this.oauth2Client.setCredentials({
-          refresh_token: refreshToken,
-        });
-      }
-
-      // Initialize Gmail API
-      this.gmail = google.gmail({
-        version: 'v1',
-        auth: this.oauth2Client,
+      // Initialize Graph client
+      this.graphClient = Client.initWithMiddleware({
+        authProvider: {
+          getAccessToken: async () => {
+            const token = await credential.getToken('https://graph.microsoft.com/.default');
+            return token.token;
+          },
+        },
       });
 
-      this.logger.log('Gmail API initialized successfully');
+      this.logger.log('Microsoft Graph API (Outlook) initialized successfully');
     } catch (error) {
-      this.logger.error('Failed to initialize Gmail API:', error);
+      this.logger.error('Failed to initialize Microsoft Graph API:', error);
     }
   }
 
@@ -96,54 +93,58 @@ export class EmailService {
     html?: string,
     userId?: string,
   ): Promise<SendEmailResult> {
-    if (!this.gmail) {
+    if (!this.graphClient) {
       return {
         success: false,
-        error: 'Gmail API not initialized. Please configure Google credentials.',
+        error: 'Outlook API not initialized. Please configure Microsoft credentials.',
       };
     }
 
     try {
       this.logger.log(`${draftOnly ? 'Creating draft' : 'Sending email'} to: ${to.join(', ')}`);
 
+      const userPrincipalName = userId || this.config.get<string>('MICROSOFT_USER_EMAIL');
+
       // Build email message
-      const email = this.buildEmailMessage({
-        to,
-        cc,
-        bcc,
+      const message = {
         subject,
-        body,
-        html,
-      });
+        body: {
+          contentType: html ? 'HTML' : 'Text',
+          content: html || body,
+        },
+        toRecipients: to.map(email => ({
+          emailAddress: { address: email },
+        })),
+        ccRecipients: cc?.map(email => ({
+          emailAddress: { address: email },
+        })) || [],
+        bccRecipients: bcc?.map(email => ({
+          emailAddress: { address: email },
+        })) || [],
+      };
 
       if (draftOnly) {
         // Create draft
-        const response = await this.gmail.users.drafts.create({
-          userId: 'me',
-          requestBody: {
-            message: {
-              raw: email,
-            },
-          },
-        });
+        const response = await this.graphClient
+          .api(`/users/${userPrincipalName}/messages`)
+          .post(message);
 
         return {
           success: true,
-          draftId: response.data.id,
-          message: `Draft created successfully`,
+          draftId: response.id,
+          message: 'Draft created successfully',
         };
       } else {
         // Send email
-        const response = await this.gmail.users.messages.send({
-          userId: 'me',
-          requestBody: {
-            raw: email,
-          },
-        });
+        await this.graphClient
+          .api(`/users/${userPrincipalName}/sendMail`)
+          .post({
+            message,
+            saveToSentItems: true,
+          });
 
         return {
           success: true,
-          messageId: response.data.id,
           message: `Email sent successfully to ${to.join(', ')}`,
         };
       }
@@ -165,52 +166,52 @@ export class EmailService {
     unreadOnly: boolean = false,
     userId?: string,
   ): Promise<ReadEmailsResult> {
-    if (!this.gmail) {
+    if (!this.graphClient) {
       return {
         success: false,
-        error: 'Gmail API not initialized. Please configure Google credentials.',
+        error: 'Outlook API not initialized. Please configure Microsoft credentials.',
       };
     }
 
     try {
       this.logger.log(`Reading emails (max: ${maxResults}, query: ${query || 'none'})`);
 
-      // Build search query
-      let searchQuery = query || '';
-      if (unreadOnly && !searchQuery.includes('is:unread')) {
-        searchQuery = searchQuery ? `${searchQuery} is:unread` : 'is:unread';
+      const userPrincipalName = userId || this.config.get<string>('MICROSOFT_USER_EMAIL');
+
+      // Build filter
+      let filter = '';
+      if (unreadOnly) {
+        filter = 'isRead eq false';
       }
 
-      // Get message IDs
-      const listResponse = await this.gmail.users.messages.list({
-        userId: 'me',
-        q: searchQuery,
-        maxResults,
-      });
+      let request = this.graphClient
+        .api(`/users/${userPrincipalName}/messages`)
+        .top(maxResults)
+        .orderby('receivedDateTime DESC')
+        .select('id,subject,from,toRecipients,ccRecipients,bodyPreview,receivedDateTime,conversationId,isRead');
 
-      const messages = listResponse.data.messages || [];
-
-      if (messages.length === 0) {
-        return {
-          success: true,
-          emails: [],
-          count: 0,
-          message: 'No emails found',
-        };
+      if (filter) {
+        request = request.filter(filter);
       }
 
-      // Fetch full message details
-      const emails: EmailMessage[] = await Promise.all(
-        messages.map(async (msg: any) => {
-          const details = await this.gmail.users.messages.get({
-            userId: 'me',
-            id: msg.id,
-            format: 'full',
-          });
+      if (query) {
+        request = request.search(`"${query}"`);
+      }
 
-          return this.parseEmailMessage(details.data);
-        })
-      );
+      const response = await request.get();
+      const items = response.value || [];
+
+      const emails: EmailMessage[] = items.map((msg: any) => ({
+        id: msg.id,
+        threadId: msg.conversationId,
+        from: msg.from?.emailAddress?.address,
+        to: msg.toRecipients?.map((r: any) => r.emailAddress.address) || [],
+        cc: msg.ccRecipients?.map((r: any) => r.emailAddress.address),
+        subject: msg.subject,
+        body: msg.bodyPreview,
+        snippet: msg.bodyPreview,
+        date: msg.receivedDateTime,
+      }));
 
       this.logger.log(`Retrieved ${emails.length} emails`);
 
@@ -233,58 +234,36 @@ export class EmailService {
    * Reply to an email
    */
   async replyToEmail(
-    threadId: string,
+    messageId: string,
     replyBody: string,
     replyAll: boolean = false,
     userId?: string,
   ): Promise<SendEmailResult> {
-    if (!this.gmail) {
+    if (!this.graphClient) {
       return {
         success: false,
-        error: 'Gmail API not initialized. Please configure Google credentials.',
+        error: 'Outlook API not initialized. Please configure Microsoft credentials.',
       };
     }
 
     try {
-      this.logger.log(`Replying to thread: ${threadId}`);
+      this.logger.log(`Replying to message: ${messageId}`);
 
-      // Get original message to extract recipients
-      const thread = await this.gmail.users.threads.get({
-        userId: 'me',
-        id: threadId,
-      });
+      const userPrincipalName = userId || this.config.get<string>('MICROSOFT_USER_EMAIL');
 
-      const originalMessage = thread.data.messages[0];
-      const headers = originalMessage.payload.headers;
+      const reply = {
+        comment: replyBody,
+      };
 
-      const from = this.getHeader(headers, 'From');
-      const to = this.getHeader(headers, 'To');
-      const cc = replyAll ? this.getHeader(headers, 'Cc') : '';
-      const subject = this.getHeader(headers, 'Subject');
+      const endpoint = replyAll ? 'replyAll' : 'reply';
 
-      // Build reply
-      const replyTo = from ? [this.extractEmail(from)] : [];
-      const replyCc = replyAll && cc ? cc.split(',').map(e => this.extractEmail(e.trim())) : undefined;
-
-      const email = this.buildEmailMessage({
-        to: replyTo,
-        cc: replyCc,
-        subject: subject.startsWith('Re:') ? subject : `Re: ${subject}`,
-        body: replyBody,
-      });
-
-      const response = await this.gmail.users.messages.send({
-        userId: 'me',
-        requestBody: {
-          raw: email,
-          threadId, // Keep in same thread
-        },
-      });
+      await this.graphClient
+        .api(`/users/${userPrincipalName}/messages/${messageId}/${endpoint}`)
+        .post(reply);
 
       return {
         success: true,
-        messageId: response.data.id,
-        message: `Reply sent successfully`,
+        message: 'Reply sent successfully',
       };
     } catch (error) {
       this.logger.error('Error replying to email:', error);
@@ -303,22 +282,21 @@ export class EmailService {
     markAsRead: boolean = true,
     userId?: string,
   ): Promise<{ success: boolean; message?: string; error?: string }> {
-    if (!this.gmail) {
+    if (!this.graphClient) {
       return {
         success: false,
-        error: 'Gmail API not initialized.',
+        error: 'Outlook API not initialized.',
       };
     }
 
     try {
-      await this.gmail.users.messages.modify({
-        userId: 'me',
-        id: messageId,
-        requestBody: {
-          removeLabelIds: markAsRead ? ['UNREAD'] : [],
-          addLabelIds: markAsRead ? [] : ['UNREAD'],
-        },
-      });
+      const userPrincipalName = userId || this.config.get<string>('MICROSOFT_USER_EMAIL');
+
+      await this.graphClient
+        .api(`/users/${userPrincipalName}/messages/${messageId}`)
+        .patch({
+          isRead: markAsRead,
+        });
 
       return {
         success: true,
@@ -341,24 +319,32 @@ export class EmailService {
     permanent: boolean = false,
     userId?: string,
   ): Promise<{ success: boolean; message?: string; error?: string }> {
-    if (!this.gmail) {
+    if (!this.graphClient) {
       return {
         success: false,
-        error: 'Gmail API not initialized.',
+        error: 'Outlook API not initialized.',
       };
     }
 
     try {
+      const userPrincipalName = userId || this.config.get<string>('MICROSOFT_USER_EMAIL');
+
       if (permanent) {
-        await this.gmail.users.messages.delete({
-          userId: 'me',
-          id: messageId,
-        });
+        // Permanently delete
+        await this.graphClient
+          .api(`/users/${userPrincipalName}/messages/${messageId}`)
+          .delete();
       } else {
-        await this.gmail.users.messages.trash({
-          userId: 'me',
-          id: messageId,
-        });
+        // Move to Deleted Items folder
+        const deletedItemsFolder = await this.graphClient
+          .api(`/users/${userPrincipalName}/mailFolders/deleteditems`)
+          .get();
+
+        await this.graphClient
+          .api(`/users/${userPrincipalName}/messages/${messageId}/move`)
+          .post({
+            destinationId: deletedItemsFolder.id,
+          });
       }
 
       return {
@@ -374,143 +360,100 @@ export class EmailService {
     }
   }
 
-  /* -------------------------------------------------------------------------
-   * Helper Methods
-   * ----------------------------------------------------------------------- */
-
   /**
-   * Build RFC 2822 formatted email message
+   * Forward an email
    */
-  private buildEmailMessage(email: Partial<EmailMessage>): string {
-    const lines = [];
-
-    if (email.to && email.to.length > 0) {
-      lines.push(`To: ${email.to.join(', ')}`);
-    }
-    if (email.cc && email.cc.length > 0) {
-      lines.push(`Cc: ${email.cc.join(', ')}`);
-    }
-    if (email.bcc && email.bcc.length > 0) {
-      lines.push(`Bcc: ${email.bcc.join(', ')}`);
-    }
-    if (email.subject) {
-      lines.push(`Subject: ${email.subject}`);
+  async forwardEmail(
+    messageId: string,
+    toRecipients: string[],
+    comment?: string,
+    userId?: string,
+  ): Promise<SendEmailResult> {
+    if (!this.graphClient) {
+      return {
+        success: false,
+        error: 'Outlook API not initialized.',
+      };
     }
 
-    lines.push('MIME-Version: 1.0');
-
-    if (email.html) {
-      lines.push('Content-Type: text/html; charset=utf-8');
-      lines.push('');
-      lines.push(email.html);
-    } else {
-      lines.push('Content-Type: text/plain; charset=utf-8');
-      lines.push('');
-      lines.push(email.body || '');
-    }
-
-    const message = lines.join('\r\n');
-
-    // Encode in base64url format
-    return Buffer.from(message)
-      .toString('base64')
-      .replace(/\+/g, '-')
-      .replace(/\//g, '_')
-      .replace(/=+$/, '');
-  }
-
-  /**
-   * Parse Gmail message into EmailMessage interface
-   */
-  private parseEmailMessage(message: any): EmailMessage {
-    const headers = message.payload?.headers || [];
-
-    const from = this.getHeader(headers, 'From');
-    const to = this.getHeader(headers, 'To');
-    const cc = this.getHeader(headers, 'Cc');
-    const subject = this.getHeader(headers, 'Subject');
-    const date = this.getHeader(headers, 'Date');
-
-    // Extract body
-    let body = '';
-    if (message.payload?.body?.data) {
-      body = Buffer.from(message.payload.body.data, 'base64').toString('utf-8');
-    } else if (message.payload?.parts) {
-      // Multi-part message
-      const textPart = message.payload.parts.find((part: any) => part.mimeType === 'text/plain');
-      if (textPart?.body?.data) {
-        body = Buffer.from(textPart.body.data, 'base64').toString('utf-8');
-      }
-    }
-
-    return {
-      id: message.id,
-      threadId: message.threadId,
-      from,
-      to: to ? to.split(',').map(e => e.trim()) : [],
-      cc: cc ? cc.split(',').map(e => e.trim()) : undefined,
-      subject,
-      body,
-      date,
-      snippet: message.snippet,
-    };
-  }
-
-  /**
-   * Get header value by name
-   */
-  private getHeader(headers: any[], name: string): string {
-    const header = headers.find((h: any) => h.name.toLowerCase() === name.toLowerCase());
-    return header?.value || '';
-  }
-
-  /**
-   * Extract email address from "Name <email@example.com>" format
-   */
-  private extractEmail(text: string): string {
-    const match = text.match(/<(.+?)>/);
-    return match ? match[1] : text.trim();
-  }
-
-  /**
-   * Get authorization URL for OAuth flow
-   */
-  getAuthUrl(): string {
-    const scopes = [
-      'https://www.googleapis.com/auth/gmail.send',
-      'https://www.googleapis.com/auth/gmail.readonly',
-      'https://www.googleapis.com/auth/gmail.modify',
-      'https://www.googleapis.com/auth/gmail.compose',
-    ];
-
-    return this.oauth2Client.generateAuthUrl({
-      access_type: 'offline',
-      scope: scopes,
-      prompt: 'consent',
-    });
-  }
-
-  /**
-   * Exchange authorization code for tokens
-   */
-  async handleAuthCallback(code: string): Promise<{ success: boolean; tokens?: any; error?: string }> {
     try {
-      const { tokens } = await this.oauth2Client.getToken(code);
-      this.oauth2Client.setCredentials(tokens);
+      this.logger.log(`Forwarding message ${messageId} to ${toRecipients.join(', ')}`);
 
-      this.logger.log('Successfully obtained Gmail tokens');
-      this.logger.log('IMPORTANT: Save this refresh token to your .env file:');
-      this.logger.log(`GOOGLE_REFRESH_TOKEN=${tokens.refresh_token}`);
+      const userPrincipalName = userId || this.config.get<string>('MICROSOFT_USER_EMAIL');
+
+      await this.graphClient
+        .api(`/users/${userPrincipalName}/messages/${messageId}/forward`)
+        .post({
+          comment: comment || '',
+          toRecipients: toRecipients.map(email => ({
+            emailAddress: { address: email },
+          })),
+        });
 
       return {
         success: true,
-        tokens,
+        message: `Email forwarded to ${toRecipients.join(', ')}`,
       };
     } catch (error) {
-      this.logger.error('Error handling auth callback:', error);
+      this.logger.error('Error forwarding email:', error);
       return {
         success: false,
-        error: error.message || 'Failed to exchange auth code',
+        error: error.message || 'Failed to forward email',
+      };
+    }
+  }
+
+  /**
+   * Search emails
+   */
+  async searchEmails(
+    searchQuery: string,
+    maxResults: number = 20,
+    userId?: string,
+  ): Promise<ReadEmailsResult> {
+    if (!this.graphClient) {
+      return {
+        success: false,
+        error: 'Outlook API not initialized.',
+      };
+    }
+
+    try {
+      this.logger.log(`Searching emails: ${searchQuery}`);
+
+      const userPrincipalName = userId || this.config.get<string>('MICROSOFT_USER_EMAIL');
+
+      const response = await this.graphClient
+        .api(`/users/${userPrincipalName}/messages`)
+        .search(`"${searchQuery}"`)
+        .top(maxResults)
+        .select('id,subject,from,toRecipients,bodyPreview,receivedDateTime,conversationId')
+        .get();
+
+      const items = response.value || [];
+
+      const emails: EmailMessage[] = items.map((msg: any) => ({
+        id: msg.id,
+        threadId: msg.conversationId,
+        from: msg.from?.emailAddress?.address,
+        to: msg.toRecipients?.map((r: any) => r.emailAddress.address) || [],
+        subject: msg.subject,
+        body: msg.bodyPreview,
+        snippet: msg.bodyPreview,
+        date: msg.receivedDateTime,
+      }));
+
+      return {
+        success: true,
+        emails,
+        count: emails.length,
+        message: `Found ${emails.length} matching email(s)`,
+      };
+    } catch (error) {
+      this.logger.error('Error searching emails:', error);
+      return {
+        success: false,
+        error: error.message || 'Failed to search emails',
       };
     }
   }

@@ -2,7 +2,7 @@
 
 ## Quick Start
 
-After setting up Google credentials (see `GOOGLE_SETUP_GUIDE.md`), test the AI assistant's new capabilities.
+After setting up Microsoft 365 credentials (see `MICROSOFT_SETUP_GUIDE.md`), test the AI assistant's new capabilities.
 
 ---
 
@@ -23,7 +23,7 @@ curl -X POST http://localhost:3000/api/v1/ai/text-command1 \
 **Expected AI Behavior:**
 - AI recognizes calendar query
 - Calls `check_calendar` function with today's date
-- Returns formatted list of meetings
+- Returns formatted list of Outlook calendar meetings
 
 **Alternative Questions:**
 - "Am I free at 3pm tomorrow?"
@@ -48,7 +48,7 @@ curl -X POST http://localhost:3000/api/v1/ai/text-command1 \
 **Expected AI Behavior:**
 - AI extracts: title, date/time, duration, attendees
 - Calls `create_calendar_event` with parsed parameters
-- Creates event with Google Meet link
+- Creates event with Microsoft Teams meeting link
 - Confirms creation to user
 
 **Alternative Requests:**
@@ -109,7 +109,7 @@ curl -X POST http://localhost:3000/api/v1/ai/text-command1 \
 **Expected AI Behavior:**
 - AI recognizes "draft" keyword
 - Calls `send_email` with `draft_only: true`
-- Creates Gmail draft (doesn't send)
+- Creates Outlook draft (doesn't send)
 - Confirms draft created
 
 ---
@@ -419,7 +419,7 @@ curl http://localhost:3000/api/v1/ai/status
 ## Troubleshooting
 
 ### "Calendar API not initialized"
-→ Check `.env` has `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN`
+→ Check `.env` has `MICROSOFT_TENANT_ID`, `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, `MICROSOFT_USER_EMAIL`
 
 ### AI doesn't call the right tool
 → Check function definitions in `ai-voice.service.ts`
@@ -433,7 +433,7 @@ curl http://localhost:3000/api/v1/ai/status
 
 ## Next Steps
 
-1. ✅ Follow `GOOGLE_SETUP_GUIDE.md` to get credentials
+1. ✅ Follow `MICROSOFT_SETUP_GUIDE.md` to get credentials
 2. ✅ Test calendar features
 3. ✅ Test email features
 4. ✅ Test combined workflows
