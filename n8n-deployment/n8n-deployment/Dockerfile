@@ -2,7 +2,7 @@
 FROM n8nio/n8n:latest
 
 # Set working directory
-WORKDIR /data
+WORKDIR /home/node
 
 # Install additional dependencies if needed
 USER root
@@ -32,4 +32,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:5678/healthz || exit 1
 
 # Start N8N
-CMD ["n8n"]
+ENTRYPOINT ["n8n"]
