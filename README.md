@@ -1,319 +1,277 @@
-# Atom AI Assistant Backend
+# N8N Deployment on Railway for Atom AI Assistant
 
-An intelligent AI personal assistant powered by OpenAI that manages your calendar, emails, and more through natural conversation.
-
-[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template)
-
----
-
-## 🎯 Features
-
-- 🤖 **AI-Powered Conversation** - Natural language understanding with OpenAI GPT-4
-- 📅 **Calendar Management** - View and create Outlook calendar events with Teams meeting links
-- 📧 **Email Integration** - Send, read, and manage Outlook emails
-- 🎤 **Voice Commands** - Process voice input via OpenAI Whisper
-- 💬 **Context Memory** - Maintains conversation history across sessions
-- 🔧 **Function Calling** - AI intelligently selects which tools to use
-
----
-
-## 🚀 Quick Deploy to Railway
-
-**Fastest way to get started (10 minutes):**
-
-1. **Click the Railway button above** or follow [`QUICK_START.md`](QUICK_START.md)
-2. **Add PostgreSQL** database in Railway
-3. **Set environment variables** (see below)
-4. **Test your API** endpoint
-
-**Detailed guide:** See [`RAILWAY_DEPLOYMENT.md`](RAILWAY_DEPLOYMENT.md)
-
----
+This directory contains all configuration files needed to deploy N8N on Railway as part of your Atom AI personal assistant application.
 
 ## 📋 Prerequisites
 
-- **Railway Account** - [Sign up here](https://railway.app) ($5/month free credit)
-- **OpenAI API Key** - [Get here](https://platform.openai.com/api-keys)
-- **Microsoft 365 Account** - For calendar and email
-- **Azure AD App** - Follow [`MICROSOFT_SETUP_GUIDE.md`](MICROSOFT_SETUP_GUIDE.md)
+Before deploying, ensure you have:
 
----
+- ✅ Railway account with CLI installed
+- ✅ GitHub repository for version control
+- ✅ Supabase project with connection credentials
+- ✅ Google Cloud Console project (for Gmail/Calendar OAuth)
+- ✅ OpenAI API key (if planning AI workflows)
 
-## ⚙️ Environment Variables
+## 🚀 Quick Deployment Steps
 
-### Required Variables
+### 1. Create N8N Service on Railway
 
-```env
-# Database (auto-set by Railway)
-DATABASE_URL=postgresql://...
+#### Option A: Using Railway Dashboard (Recommended for first-time)
 
-# OpenAI
-OPENAI_API_KEY=sk-your-openai-key
+1. Go to [Railway Dashboard](https://railway.app/dashboard)
+2. Click on your existing project (where Atom backend is deployed)
+3. Click **"+ New Service"** → **"Empty Service"**
+4. Name it: `atom-n8n`
+5. Click on the service → **"Settings"** tab
 
-# Microsoft 365 (from Azure Portal)
-MICROSOFT_TENANT_ID=your-tenant-id
-MICROSOFT_CLIENT_ID=your-application-id
-MICROSOFT_CLIENT_SECRET=your-client-secret
-MICROSOFT_USER_EMAIL=you@yourcompany.com
+#### Option B: Using Railway CLI
 
-# Server
-PORT=3000  # Auto-set by Railway
-NODE_ENV=production
-```
-
-See [`.env.example`](.env.example) for full configuration.
-
----
-
-## 📖 Documentation
-
-| Guide | Purpose |
-|-------|---------|
-| [`QUICK_START.md`](QUICK_START.md) | Deploy to Railway in 10 minutes |
-| [`RAILWAY_DEPLOYMENT.md`](RAILWAY_DEPLOYMENT.md) | Detailed Railway deployment guide |
-| [`MICROSOFT_SETUP_GUIDE.md`](MICROSOFT_SETUP_GUIDE.md) | Set up Azure AD for Microsoft 365 |
-| [`FUNCTION_CALLING_GUIDE.md`](FUNCTION_CALLING_GUIDE.md) | How the AI function calling works |
-| [`TESTING_GUIDE.md`](TESTING_GUIDE.md) | Test calendar and email features |
-
----
-
-## 🧪 Testing Your Deployment
-
-Once deployed to Railway, test your endpoints:
-
-### Health Check
 ```bash
-curl https://your-app.up.railway.app/api/v1/ai/health
+# Navigate to your n8n-deployment directory
+cd n8n-deployment
+
+# Login to Railway
+railway login
+
+# Link to your existing project
+railway link
+
+# Create new service
+railway service create atom-n8n
+
+# Link this directory to the service
+railway service
 ```
 
-### Test Calendar
+### 2. Configure GitHub Integration
+
+1. In Railway service settings, go to **"Source"** section
+2. Click **"Connect Repo"**
+3. Select your Atom repository
+4. Set **Root Directory** to: `n8n-deployment` (or wherever you placed these files)
+5. Railway will auto-detect the Dockerfile
+
+### 3. Set Environment Variables
+
+In Railway service → **"Variables"** tab, add these (refer to `.env.example` for all variables):
+
+#### Critical Variables (Set These First):
+
 ```bash
-curl -X POST https://your-app.up.railway.app/api/v1/ai/text-command1 \
-  -H "Content-Type: application/json" \
-  -d '{
-    "message": "What meetings do I have today?",
-    "userId": "test-user"
-  }'
+# Core Configuration
+N8N_PORT=5678
+N8N_PROTOCOL=https
+N8N_HOST=${{RAILWAY_PUBLIC_DOMAIN}}
+WEBHOOK_URL=https://${{RAILWAY_PUBLIC_DOMAIN}}
+
+# Database (Use your Supabase connection)
+DB_TYPE=postgresdb
+DB_POSTGRESDB_CONNECTION_URL=postgresql://postgres.[ref]:[password]@[host]:6543/postgres
+DB_POSTGRESDB_SCHEMA=n8n
+
+# Security (CHANGE THESE!)
+N8N_BASIC_AUTH_ACTIVE=true
+N8N_BASIC_AUTH_USER=admin
+N8N_BASIC_AUTH_PASSWORD=your-secure-password-here
+
+# Encryption (Generate with: openssl rand -base64 32)
+N8N_ENCRYPTION_KEY=your-encryption-key-here
+
+# Execution
+EXECUTIONS_PROCESS=main
+EXECUTIONS_DATA_SAVE_ON_ERROR=all
+EXECUTIONS_DATA_SAVE_ON_SUCCESS=all
+
+# Timezone
+GENERIC_TIMEZONE=America/Chicago
+TIMEZONE=America/Chicago
+
+# CORS (Add your frontend/backend domains)
+N8N_CORS_ENABLED=true
+N8N_CORS_ORIGINS=https://your-frontend.up.railway.app,https://your-backend.up.railway.app
 ```
 
-### Test Email
+### 4. Generate Required Secrets
+
 ```bash
-curl -X POST https://your-app.up.railway.app/api/v1/ai/text-command1 \
-  -H "Content-Type: application/json" \
-  -d '{
-    "message": "Send an email to john@example.com",
-    "userId": "test-user"
-  }'
+# Generate encryption key
+openssl rand -base64 32
+
+# Generate secure password
+openssl rand -base64 24
 ```
 
-### Test Voice
+### 5. Deploy
+
+Railway will automatically deploy when you push to GitHub. Or trigger manual deploy:
+
 ```bash
-curl -X POST https://your-app.up.railway.app/api/v1/ai/voice-command1 \
-  -F "audio=@recording.mp3" \
-  -F "userId=test-user"
+# Using Railway CLI
+railway up
+
+# Or in Dashboard: Click "Deploy" button
 ```
 
----
+### 6. Verify Deployment
 
-## 🏗️ Architecture
+1. Check deployment logs in Railway dashboard
+2. Once deployed, Railway will provide a public URL: `https://atom-n8n-production-xxxx.up.railway.app`
+3. Access N8N UI: Navigate to your Railway URL
+4. Login with your `N8N_BASIC_AUTH_USER` and `N8N_BASIC_AUTH_PASSWORD`
 
-### Tech Stack
+## 🔧 Post-Deployment Configuration
 
-- **Framework:** NestJS 10
-- **Database:** PostgreSQL with TypeORM
-- **AI:** OpenAI GPT-4.1-mini + Whisper
-- **Integrations:** Microsoft Graph API
-- **Deployment:** Railway.app
+### 1. Set Up Supabase N8N Schema
 
-### Architecture Flow
+N8N needs its own schema in your Supabase database:
 
+```sql
+-- Connect to your Supabase SQL Editor
+-- Run this to create N8N schema:
+
+CREATE SCHEMA IF NOT EXISTS n8n;
+
+-- Grant permissions to your Supabase user
+GRANT ALL PRIVILEGES ON SCHEMA n8n TO postgres;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA n8n TO postgres;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA n8n TO postgres;
+
+-- N8N will auto-create its tables on first run
 ```
-User Request (Text/Voice)
-    ↓
-AI Voice Service
-    ↓
-OpenAI Function Calling
-    ├→ Calendar Service → Microsoft Graph Calendar API
-    ├→ Email Service → Microsoft Graph Mail API
-    ├→ Knowledge Base (coming soon)
-    └→ CRM Integration (coming soon)
-    ↓
-Natural Language Response
-```
 
----
+### 2. Configure Google OAuth (Gmail & Calendar)
 
-## 🛠️ Local Development
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Create a new project or select existing
+3. Enable APIs:
+   - Gmail API
+   - Google Calendar API
+4. Create OAuth 2.0 credentials:
+   - **Application type**: Web application
+   - **Authorized redirect URIs**: `https://[your-n8n-domain].up.railway.app/rest/oauth2-credential/callback`
+5. Copy Client ID and Client Secret
+6. Add to Railway N8N service environment variables:
+   ```
+   GOOGLE_CLIENT_ID=your-client-id
+   GOOGLE_CLIENT_SECRET=your-client-secret
+   ```
 
-### Install Dependencies
+### 3. Configure N8N Credentials in UI
+
+After logging into N8N:
+
+1. Click **"Credentials"** in left sidebar
+2. Click **"Add Credential"**
+3. Add these credentials:
+   - **Gmail**: Select "OAuth2" → Use your Google Client ID/Secret
+   - **Google Calendar**: Same OAuth2 credentials
+   - **OpenAI**: Add your API key (if using AI nodes)
+   - **HTTP Request**: For calling your NestJS backend
+
+## 🔗 Integration with NestJS Backend
+
+### Update Your NestJS Backend
+
+Add these environment variables to your Atom backend service in Railway:
+
 ```bash
-npm install
+N8N_WEBHOOK_URL=https://[your-n8n-domain].up.railway.app
+N8N_API_KEY=[generate-api-key-in-n8n]
 ```
 
-### Set Up Environment
+### Create N8N Service in NestJS
+
+You'll create a service to call N8N webhooks (we'll do this in next step).
+
+## 📊 Health Monitoring
+
+### Check N8N Status
+
 ```bash
-cp .env.example .env
-# Edit .env with your credentials
+# Health endpoint
+curl https://[your-n8n-domain].up.railway.app/healthz
+
+# Should return: {"status":"ok"}
 ```
 
-### Run Database Migration
-```bash
-# TypeORM auto-creates tables on first run (synchronize: true)
+### Railway Logs
+
+Monitor logs in Railway dashboard for any issues:
+- Click on N8N service
+- Go to "Deployments" tab
+- Click on latest deployment
+- View logs in real-time
+
+## 🔐 Security Checklist
+
+- [ ] Changed default N8N_BASIC_AUTH_PASSWORD
+- [ ] Generated strong N8N_ENCRYPTION_KEY
+- [ ] Configured CORS with specific domains (not *)
+- [ ] Using HTTPS (Railway provides this automatically)
+- [ ] Supabase connection uses connection pooler (port 6543)
+- [ ] Google OAuth credentials restricted to your domain
+- [ ] N8N UI protected with basic auth
+
+## 🐛 Troubleshooting
+
+### Issue: N8N won't start
+
+**Solution**: Check logs for database connection errors. Verify Supabase credentials.
+
+### Issue: Webhooks not accessible
+
+**Solution**: 
+1. Check `WEBHOOK_URL` and `N8N_HOST` are set correctly
+2. Verify CORS settings include your backend domain
+3. Check Railway public networking is enabled
+
+### Issue: Google OAuth fails
+
+**Solution**:
+1. Verify redirect URI in Google Console matches exactly: `https://[domain]/rest/oauth2-credential/callback`
+2. Ensure Gmail and Calendar APIs are enabled
+3. Check OAuth consent screen is configured
+
+### Issue: Database connection timeout
+
+**Solution**:
+1. Use Supabase connection pooler (port 6543, not 5432)
+2. Check connection string format
+3. Verify n8n schema exists and has proper permissions
+
+## 📚 Next Steps
+
+After successful deployment:
+
+1. ✅ **Create your first workflow**: "Send Email via Gmail"
+2. ✅ **Set up webhook endpoint**: For NestJS to trigger workflows
+3. ✅ **Test integration**: Send test email from your Atom app
+4. ✅ **Build calendar workflows**: Create/update events
+5. ✅ **Add error handling**: Workflow error notifications
+
+## 🔗 Useful Links
+
+- [N8N Documentation](https://docs.n8n.io/)
+- [Railway Documentation](https://docs.railway.app/)
+- [N8N Community Nodes](https://www.npmjs.com/search?q=n8n-nodes-)
+- [Supabase Connection Pooling](https://supabase.com/docs/guides/database/connecting-to-postgres#connection-pooler)
+
+## 💾 Backup Strategy
+
+N8N workflows are stored in your Supabase database. To backup:
+
+```sql
+-- Export N8N workflows
+SELECT * FROM n8n.workflow_entity;
+
+-- Export credentials (encrypted)
+SELECT * FROM n8n.credentials_entity;
 ```
 
-### Start Development Server
-```bash
-npm run start:dev
-```
-
-Server runs on `http://localhost:3000`
+Consider enabling Supabase automatic backups for production.
 
 ---
 
-## 📦 Project Structure
+**Status**: Ready for deployment ✅
 
-```
-Atom-Backend/
-├── src/
-│   ├── ai/                      # AI & function calling
-│   │   ├── ai-voice.service.ts  # Main AI orchestrator
-│   │   └── chat-memory.entity.ts
-│   ├── integrations/
-│   │   ├── calendar/            # Outlook Calendar
-│   │   │   └── calendar.service.ts
-│   │   └── email/               # Outlook Email
-│   │       └── email.service.ts
-│   ├── conversation/            # Conversation management
-│   └── main.ts
-├── docs/                        # Documentation
-├── railway.json                 # Railway config
-├── Dockerfile                   # Container config
-└── package.json
-```
-
----
-
-## 🔐 Security Notes
-
-**⚠️ IMPORTANT:** This is a development/testing version. Before production:
-
-- [ ] Implement JWT authentication
-- [ ] Add rate limiting
-- [ ] Enable input validation
-- [ ] Use per-user credential storage
-- [ ] Implement RBAC (Role-Based Access Control)
-- [ ] Add audit logging
-- [ ] Enable HTTPS only
-- [ ] Set up monitoring (Sentry, etc.)
-
-See the code review document for detailed security recommendations.
-
----
-
-## 💰 Cost Estimates (Railway)
-
-### Free Tier ($5/month credit)
-- **Compute:** ~500 hours/month
-- **Database:** Generous free tier
-- **Bandwidth:** Sufficient for testing
-
-### With Auto-Sleep Enabled
-- Sleeps after 30 min inactivity
-- Wakes on first request
-- Can last entire month on free tier
-
-### Estimated Monthly Cost (Active Testing)
-- **Hobby Plan:** ~$5-10/month
-- **Production:** ~$20-50/month depending on traffic
-
----
-
-## 🚢 Deployment Options
-
-### Railway (Recommended for Testing)
-- ✅ Easy setup
-- ✅ Free tier
-- ✅ Auto-deploys
-- ✅ Managed database
-- 📄 Guide: [`RAILWAY_DEPLOYMENT.md`](RAILWAY_DEPLOYMENT.md)
-
-### Other Platforms
-- **Heroku:** Similar to Railway
-- **AWS:** More control, higher cost
-- **Azure:** Good Microsoft integration
-- **DigitalOcean:** App Platform
-
----
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit changes (`git commit -m 'Add amazing feature'`)
-4. Push to branch (`git push origin feature/amazing-feature`)
-5. Open Pull Request
-
----
-
-## 📝 Roadmap
-
-### ✅ Completed
-- [x] OpenAI GPT-4 integration
-- [x] Function calling framework
-- [x] Microsoft Calendar integration
-- [x] Outlook email integration
-- [x] Voice transcription (Whisper)
-- [x] Conversation memory
-- [x] Railway deployment
-
-### 🚧 In Progress
-- [ ] User authentication (JWT)
-- [ ] RAG knowledge base integration
-- [ ] CRM integration (Salesforce/HubSpot)
-
-### 🔮 Future
-- [ ] Multi-user support
-- [ ] File attachments
-- [ ] Recurring calendar events
-- [ ] Email templates
-- [ ] Analytics dashboard
-- [ ] Mobile app support
-
----
-
-## 📄 License
-
-This project is private and proprietary.
-
----
-
-## 🆘 Support
-
-- **Documentation:** See `docs/` folder
-- **Issues:** Create GitHub issue
-- **Railway Support:** [Railway Discord](https://discord.gg/railway)
-- **Microsoft Graph:** [Microsoft Docs](https://docs.microsoft.com/en-us/graph/)
-
----
-
-## 🙏 Acknowledgments
-
-- **OpenAI** - GPT-4 and Whisper APIs
-- **Microsoft** - Graph API for Calendar and Email
-- **NestJS** - Amazing backend framework
-- **Railway** - Simple and affordable deployment
-
----
-
-**Built with ❤️ for construction professionals and beyond**
-
----
-
-## Quick Links
-
-- [Deploy Now](https://railway.app/new/template)
-- [Quick Start Guide](QUICK_START.md)
-- [Microsoft Setup](MICROSOFT_SETUP_GUIDE.md)
-- [Testing Guide](TESTING_GUIDE.md)
-
-**Happy building! 🚀**
+Once deployed, proceed to creating your first N8N workflow for email automation.
