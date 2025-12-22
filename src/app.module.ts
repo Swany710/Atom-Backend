@@ -5,6 +5,12 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AIVoiceModule } from './ai/ai-voice.module';
 import { ChatMemory } from './ai/chat-memory.entity';
+// ADDED: New authentication and integration modules
+import { AuthModule } from './auth/auth.module';
+import { GmailModule } from './gmail/gmail.module';
+import { GoogleDriveModule } from './google-drive/google-drive.module';
+import { KnowledgeBaseModule } from './knowledge-base/knowledge-base.module';
+import { WebSearchModule } from './web-search/web-search.module';
 
 @Module({
   imports: [
@@ -22,6 +28,12 @@ import { ChatMemory } from './ai/chat-memory.entity';
     }),
     TypeOrmModule.forFeature([ChatMemory]), // ✅ This enables repo in AppController
     AIVoiceModule,
+    // ADDED: New modules for authentication and integrations
+    AuthModule,
+    GmailModule,
+    GoogleDriveModule,
+    KnowledgeBaseModule,
+    WebSearchModule,
   ],
   controllers: [AppController],
   providers: [AppService],
