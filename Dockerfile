@@ -16,14 +16,14 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
-RUN npm ci --only=production && npm cache clean --force
+# Install dependencies (include dev for build tooling)
+RUN npm install && npm cache clean --force
 
 # Copy source code
 COPY . .
 
-# Build the application
-RUN npm run build
+# Build the application, then prune dev dependencies for production
+RUN npm run build && npm prune --omit=dev
 
 # Stage 2: Production stage
 FROM node:20-slim
