@@ -17,6 +17,11 @@ const app_controller_1 = require("./app.controller");
 const app_service_1 = require("./app.service");
 const ai_voice_module_1 = require("./ai/ai-voice.module");
 const chat_memory_entity_1 = require("./ai/chat-memory.entity");
+const auth_module_1 = require("./auth/auth.module");
+const gmail_module_1 = require("./gmail/gmail.module");
+const google_drive_module_1 = require("./google-drive/google-drive.module");
+const knowledge_base_module_1 = require("./knowledge-base/knowledge-base.module");
+const web_search_module_1 = require("./web-search/web-search.module");
 let AppModule = class AppModule {
     constructor() {
         console.log('✅ Atom App Module loaded - Ready for frontend connection');
@@ -40,6 +45,11 @@ exports.AppModule = AppModule = __decorate([
             }),
             typeorm_1.TypeOrmModule.forFeature([chat_memory_entity_1.ChatMemory]),
             ai_voice_module_1.AIVoiceModule,
+            auth_module_1.AuthModule,
+            gmail_module_1.GmailModule,
+            google_drive_module_1.GoogleDriveModule,
+            knowledge_base_module_1.KnowledgeBaseModule,
+            web_search_module_1.WebSearchModule,
         ],
         controllers: [app_controller_1.AppController],
         providers: [app_service_1.AppService],
