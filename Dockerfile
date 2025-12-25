@@ -1,53 +1,35 @@
-# UPDATED: NestJS Backend Dockerfile for Railway Deployment
-# Multi-stage build for optimal image size
+# N8N Dockerfile for Railway Deployment
+FROM n8nio/n8n:latest
 
-# Stage 1: Build stage
-FROM node:20-slim AS builder
+# Set working directory
+WORKDIR /home/node
 
-# Install system dependencies required for building
-RUN apt-get update && apt-get install -y \
-    python3 \
-    make \
-    g++ \
-    && rm -rf /var/lib/apt/lists/*
+# Install additional dependencies if needed
+USER root
 
-WORKDIR /app
+# Install curl for health checks
+RUN apk add --no-cache curl
 
-# Copy package files
-COPY package*.json ./
+# Create necessary directories with proper permissions
+RUN mkdir -p /home/node/.n8n && \
+    chown -R node:node /home/node
 
-# Install ALL dependencies (including dev deps needed for build)
-RUN npm ci && npm cache clean --force
+# Switch back to node user for security
+USER node
 
-# Copy source code
-COPY . .
+# Set environment variables
+ENV N8N_PORT=5678
+ENV N8N_PROTOCOL=https
+ENV WEBHOOK_URL=${N8N_WEBHOOK_URL}
+ENV N8N_HOST=${RAILWAY_PUBLIC_DOMAIN}
+ENV GENERIC_TIMEZONE=America/Chicago
 
-# Build the application, then prune dev dependencies for production
-RUN npm run build && npm prune --omit=dev
+# Expose port
+EXPOSE 5678
 
-# Stage 2: Production stage
-FROM node:20-slim
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:5678/healthz || exit 1
 
-# Install runtime dependencies (ffmpeg for audio transcription)
-RUN apt-get update && apt-get install -y \
-    ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
-
-# Copy built application from builder stage
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package*.json ./
-
-# Create non-root user for security
-RUN useradd -m -u 1001 nestjs && \
-    chown -R nestjs:nestjs /app
-
-USER nestjs
-
-# Expose application port
-EXPOSE 3000
-
-# Start the application
-CMD ["node", "dist/main"]
+# Use ENTRYPOINT instead of CMD so Railway cannot override it
+ENTRYPOINT ["n8n"]
