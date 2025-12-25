@@ -1,0 +1,59 @@
+# Railway Environment Variables - Copy/Paste Template
+# ===================================================
+# Instructions:
+# 1. Go to Railway Dashboard → Your Project → atom-n8n service → Variables tab
+# 2. Click "Raw Editor" button
+# 3. Copy everything below (after the instructions)
+# 4. Replace values in [brackets] with your actual values
+# 5. Paste into Railway Raw Editor
+# 6. Click "Update Variables"
+# ===================================================
+
+N8N_PORT=5678
+N8N_PROTOCOL=https
+N8N_HOST=${{RAILWAY_PUBLIC_DOMAIN}}
+WEBHOOK_URL=https://${{RAILWAY_PUBLIC_DOMAIN}}
+DB_TYPE=postgresdb
+DB_POSTGRESDB_CONNECTION_URL=[your-supabase-connection-string]
+DB_POSTGRESDB_SCHEMA=n8n
+N8N_BASIC_AUTH_ACTIVE=true
+N8N_BASIC_AUTH_USER=admin
+N8N_BASIC_AUTH_PASSWORD=[generate-with-openssl-rand-base64-24]
+N8N_ENCRYPTION_KEY=[generate-with-openssl-rand-base64-32]
+EXECUTIONS_PROCESS=main
+EXECUTIONS_DATA_SAVE_ON_ERROR=all
+EXECUTIONS_DATA_SAVE_ON_SUCCESS=all
+EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS=true
+EXECUTIONS_TIMEOUT=300
+EXECUTIONS_TIMEOUT_MAX=600
+GENERIC_TIMEZONE=America/Chicago
+TIMEZONE=America/Chicago
+N8N_CORS_ENABLED=true
+N8N_CORS_ORIGINS=[your-frontend-url],[your-backend-url]
+N8N_LOG_LEVEL=info
+N8N_LOG_OUTPUT=console
+N8N_COMMUNITY_NODES_ENABLED=true
+
+# Optional - Add these after Google OAuth setup:
+# GOOGLE_CLIENT_ID=[your-google-client-id]
+# GOOGLE_CLIENT_SECRET=[your-google-client-secret]
+
+# Optional - Add if using OpenAI nodes:
+# OPENAI_API_KEY=[your-openai-api-key]
+
+# ===================================================
+# NOTES:
+# 
+# Generate encryption key:
+#   openssl rand -base64 32
+#
+# Generate password:
+#   openssl rand -base64 24
+#
+# Supabase connection string format:
+#   postgresql://postgres.[project-ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres
+#
+# Example CORS origins:
+#   https://atom-frontend-production.up.railway.app,https://atom-backend-production.up.railway.app
+#
+# ===================================================
