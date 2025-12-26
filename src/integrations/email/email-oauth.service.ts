@@ -6,11 +6,36 @@ import axios from 'axios';
 import { EmailConnection } from './email-connection.entity';
 import { EmailProvider, emailProviders } from './email.types';
 
-interface OAuthStatePayload {
-  userId: string;
-  provider: EmailProvider;
+/**
+ * Shape of the profile returned from the Gmail API. The Gmail `users.me.profile`
+ * endpoint returns an object with an `emailAddress` field that contains the
+ * authenticated user's primary email address. Defining this interface allows
+ * TypeScript to safely access the `emailAddress` property on the response.
+ */
+interface GmailProfile {
+  emailAddress: string;
 }
 
+/**
+ * Shape of the profile returned from Microsoft Graph when querying `me`.
+ * The `mail` field is present if the account has a primary SMTP address.
+ * Otherwise, the `userPrincipalName` can be used as a fallback. Defining
+ * this interface allows us to narrow the unknown type returned by axios and
+ * access these properties without compiler errors.
+ */
+interface MicrosoftProfile {
+  mail?: string;
+  userPrincipalName?: string;
+}
+
+/**
+ * Type returned from the OAuth token exchange endpoint for both Google and
+ * Microsoft providers. While both providers return additional fields, the
+ * application only cares about a handful of them. Defining this interface
+ * explicitly makes `axios` infer the shape of `response.data` as something
+ * other than `unknown` and prevents TypeScript errors when accessing
+ * properties.
+ */
 interface TokenResponse {
   access_token: string;
   refresh_token?: string;
@@ -120,6 +145,14 @@ export class EmailOAuthService {
     return `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/authorize?${params.toString()}`;
   }
 
+  /**
+   * Exchange a Google OAuth authorization code for an access token and
+   * refresh token. After obtaining the tokens, fetch the user's profile
+   * information from Gmail and persist the connection details. Generic
+   * types are applied to the axios calls so that `response.data` is
+   * correctly inferred and property accesses (e.g. `data.emailAddress`) do
+   * not result in the type being treated as `unknown`.
+   */
   private async exchangeGoogleCode(userId: string, code: string) {
     const clientId = this.config.get<string>('GOOGLE_CLIENT_ID');
     const clientSecret = this.config.get<string>('GOOGLE_CLIENT_SECRET');
@@ -142,14 +175,17 @@ export class EmailOAuthService {
     );
 
     const { access_token, refresh_token, expires_in, scope } = tokenResponse.data;
-    const profileResponse = await axios.get(
+
+    // Fetch the authenticated user's email address using the Gmail API. The
+    // generic <GmailProfile> informs axios of the expected response shape.
+    const profileResponse = await axios.get<GmailProfile>(
       'https://gmail.googleapis.com/gmail/v1/users/me/profile',
       {
         headers: { Authorization: `Bearer ${access_token}` },
       },
     );
 
-    const emailAddress = profileResponse.data?.emailAddress;
+    const emailAddress = profileResponse.data.emailAddress;
 
     return this.connectionRepo.save({
       userId,
@@ -162,6 +198,13 @@ export class EmailOAuthService {
     });
   }
 
+  /**
+   * Exchange a Microsoft OAuth authorization code for an access token. Then
+   * fetch the authenticated user's profile from Microsoft Graph. Generic
+   * types are applied to the axios calls so that `response.data` has the
+   * correct shape, allowing safe access to the `mail` and
+   * `userPrincipalName` properties.
+   */
   private async exchangeMicrosoftCode(userId: string, code: string) {
     const clientId = this.config.get<string>('MICROSOFT_CLIENT_ID');
     const clientSecret = this.config.get<string>('MICROSOFT_CLIENT_SECRET');
@@ -189,13 +232,14 @@ export class EmailOAuthService {
     const { access_token, refresh_token, expires_in, scope: grantedScope } =
       tokenResponse.data;
 
-    const profileResponse = await axios.get(
+    // Fetch the user's profile using Microsoft Graph. Use a generic to define
+    // the expected shape of the response and avoid `unknown` types.
+    const profileResponse = await axios.get<MicrosoftProfile>(
       'https://graph.microsoft.com/v1.0/me',
       { headers: { Authorization: `Bearer ${access_token}` } },
     );
 
-    const emailAddress =
-      profileResponse.data?.mail || profileResponse.data?.userPrincipalName;
+    const emailAddress = profileResponse.data.mail || profileResponse.data.userPrincipalName;
 
     return this.connectionRepo.save({
       userId,
@@ -232,18 +276,18 @@ export class EmailOAuthService {
     return configured ? configured.split(',').map(scope => scope.trim()) : defaultScopes;
   }
 
-  private encodeState(payload: OAuthStatePayload): string {
+  private encodeState(payload: { userId: string; provider: EmailProvider }): string {
     return Buffer.from(JSON.stringify(payload)).toString('base64url');
   }
 
-  private parseState(state: string, provider: EmailProvider): OAuthStatePayload {
+  private parseState(state: string, provider: EmailProvider) {
     if (!state) {
       throw new BadRequestException('Missing OAuth state.');
     }
 
     try {
       const decoded = Buffer.from(state, 'base64url').toString('utf-8');
-      const payload = JSON.parse(decoded) as OAuthStatePayload;
+      const payload = JSON.parse(decoded) as { userId: string; provider: EmailProvider };
 
       if (!payload.userId || payload.provider !== provider) {
         throw new Error('Invalid state payload');
@@ -251,7 +295,7 @@ export class EmailOAuthService {
 
       return payload;
     } catch (error) {
-      this.logger.error('Failed to parse OAuth state', error);
+      this.logger.error('Failed to parse OAuth state', error as any);
       throw new BadRequestException('Invalid OAuth state.');
     }
   }
