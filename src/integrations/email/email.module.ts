@@ -25,8 +25,8 @@ const emailProviderFactory: Provider = {
   inject: [ConfigService, OutlookEmailService, GmailService],
 };
 import { EmailOAuthService } from './email-oauth.service';
+import { EmailOAuthController } from './email-oauth.controller';
 import { EmailController } from './email.controller';
-import { EmailConnection } from './email-connection.entity';
 
 @Module({
   imports: [TypeOrmModule.forFeature([EmailConnection])],
