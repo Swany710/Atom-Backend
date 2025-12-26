@@ -5,6 +5,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AIVoiceModule } from './ai/ai-voice.module';
 import { ChatMemory } from './ai/chat-memory.entity';
+import { EmailModule } from './integrations/email/email.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { ChatMemory } from './ai/chat-memory.entity';
     }),
     TypeOrmModule.forFeature([ChatMemory]), // ✅ This enables repo in AppController
     AIVoiceModule,
+    EmailModule,
   ],
   controllers: [AppController],
   providers: [AppService],
