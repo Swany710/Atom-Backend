@@ -157,7 +157,7 @@ export class EmailService {
         bcc,
         html,
       );
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Error sending email:', error);
       return {
         success: false,
@@ -185,7 +185,7 @@ export class EmailService {
       }
 
       return this.readOutlookEmails(userId, maxResults, query, unreadOnly);
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Error reading emails:', error);
       return {
         success: false,
@@ -225,7 +225,7 @@ export class EmailService {
         .post(reply);
 
       return { success: true, message: 'Reply sent successfully' };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Error replying to email:', error);
       return {
         success: false,
@@ -262,7 +262,7 @@ export class EmailService {
         success: true,
         message: `Email marked as ${markAsRead ? 'read' : 'unread'}`,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Error marking email:', error);
       return {
         success: false,
@@ -310,7 +310,7 @@ export class EmailService {
         success: true,
         message: permanent ? 'Email permanently deleted' : 'Email moved to trash',
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Error deleting email:', error);
       return {
         success: false,
@@ -356,7 +356,7 @@ export class EmailService {
         success: true,
         message: `Email forwarded to ${toRecipients.join(', ')}`,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Error forwarding email:', error);
       return {
         success: false,
@@ -411,7 +411,7 @@ export class EmailService {
         count: emails.length,
         message: `Found ${emails.length} matching email(s)`,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Error searching emails:', error);
       return {
         success: false,
@@ -559,7 +559,7 @@ export class EmailService {
     const connection = await this.getGmailConnection(userId);
     const accessToken = await this.ensureGmailToken(connection);
 
-    const headers = [
+    const headersList = [
       `From: ${connection.emailAddress || 'me'}`,
       `To: ${to.join(', ')}`,
       cc?.length ? `Cc: ${cc.join(', ')}` : null,
@@ -569,7 +569,7 @@ export class EmailService {
       html ? 'Content-Type: text/html; charset="UTF-8"' : 'Content-Type: text/plain; charset="UTF-8"',
     ].filter(Boolean);
 
-    const message = `${headers.join('\r\n')}\r\n\r\n${html || body}`;
+    const message = `${headersList.join('\r\n')}\r\n\r\n${html || body}`;
     const raw = Buffer.from(message)
       .toString('base64')
       .replace(/\+/g, '-')
@@ -577,7 +577,8 @@ export class EmailService {
       .replace(/=+$/, '');
 
     if (draftOnly) {
-      const response = await axios.post(
+      // Use a typed Axios response so properties on response.data are known
+      const response = await axios.post<GmailDraftResponse>(
         'https://gmail.googleapis.com/gmail/v1/users/me/drafts',
         { message: { raw } },
         { headers: { Authorization: `Bearer ${accessToken}` } },
@@ -590,7 +591,8 @@ export class EmailService {
       };
     }
 
-    const response = await axios.post(
+    // Send the email via Gmail and type the response
+    const response = await axios.post<GmailSendResponse>(
       'https://gmail.googleapis.com/gmail/v1/users/me/messages/send',
       { raw },
       { headers: { Authorization: `Bearer ${accessToken}` } },
@@ -612,7 +614,7 @@ export class EmailService {
     const connection = await this.getGmailConnection(userId);
     const accessToken = await this.ensureGmailToken(connection);
 
-    const qParts = [];
+    const qParts: string[] = [];
     if (query) {
       qParts.push(query);
     }
@@ -620,7 +622,8 @@ export class EmailService {
       qParts.push('is:unread');
     }
 
-    const listResponse = await axios.get(
+    // Type the Gmail list response
+    const listResponse = await axios.get<GmailMessageListResponse>(
       'https://gmail.googleapis.com/gmail/v1/users/me/messages',
       {
         headers: { Authorization: `Bearer ${accessToken}` },
@@ -635,7 +638,8 @@ export class EmailService {
     const emails: EmailMessage[] = [];
 
     for (const message of messages) {
-      const detailResponse = await axios.get(
+      // Fetch each message metadata; type the response so payload and headers exist
+      const detailResponse = await axios.get<GmailMessageDetailResponse>(
         `https://gmail.googleapis.com/gmail/v1/users/me/messages/${message.id}`,
         {
           headers: { Authorization: `Bearer ${accessToken}` },
@@ -646,7 +650,7 @@ export class EmailService {
       const payload = detailResponse.data?.payload;
       const headers = payload?.headers || [];
 
-      const headerValue = (name: string) =>
+      const headerValue = (name: string): string | undefined =>
         headers.find((header: any) => header.name === name)?.value;
 
       emails.push({
@@ -691,7 +695,7 @@ export class EmailService {
         success: true,
         message: `Email marked as ${markAsRead ? 'read' : 'unread'}`,
       };
-    } catch (error) {
+    } catch (error: any) {
       return {
         success: false,
         error: error.message || 'Failed to modify Gmail message',
@@ -725,7 +729,7 @@ export class EmailService {
         success: true,
         message: permanent ? 'Email permanently deleted' : 'Email moved to trash',
       };
-    } catch (error) {
+    } catch (error: any) {
       return {
         success: false,
         error: error.message || 'Failed to delete Gmail message',
@@ -802,18 +806,19 @@ export class EmailService {
       throw new Error('Google OAuth is not configured.');
     }
 
-    const tokenResponse = await axios.post(
+    // Refresh the Gmail access token using a typed response
+    const tokenResponse = await axios.post<TokenResponse>(
       'https://oauth2.googleapis.com/token',
       new URLSearchParams({
         client_id: clientId,
         client_secret: clientSecret,
-        refresh_token: connection.refreshToken,
+        refresh_token: connection.refreshToken!,
         grant_type: 'refresh_token',
       }),
       { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } },
     );
 
-    const { access_token, expires_in } = tokenResponse.data as TokenResponse;
+    const { access_token, expires_in } = tokenResponse.data;
 
     connection.accessToken = access_token;
     connection.expiresAt = expires_in ? new Date(Date.now() + expires_in * 1000) : undefined;
@@ -851,12 +856,13 @@ export class EmailService {
       'https://graph.microsoft.com/User.Read',
     ].join(' ');
 
+    // Refresh the Outlook access token using a typed response
     const tokenResponse = await axios.post<TokenResponse>(
       `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`,
       new URLSearchParams({
         client_id: clientId,
         client_secret: clientSecret,
-        refresh_token: connection.refreshToken,
+        refresh_token: connection.refreshToken!,
         grant_type: 'refresh_token',
         redirect_uri: redirectUri,
         scope,
