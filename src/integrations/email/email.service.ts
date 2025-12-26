@@ -46,6 +46,27 @@ interface TokenResponse {
   scope?: string;
 }
 
+interface GmailDraftResponse {
+  id?: string;
+}
+
+interface GmailSendResponse {
+  id?: string;
+}
+
+interface GmailMessageListResponse {
+  messages?: Array<{ id: string }>;
+}
+
+interface GmailMessageDetailResponse {
+  id?: string;
+  threadId?: string;
+  snippet?: string;
+  payload?: {
+    headers?: Array<{ name: string; value: string }>;
+  };
+}
+
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
