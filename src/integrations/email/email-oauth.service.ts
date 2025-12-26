@@ -18,15 +18,6 @@ interface TokenResponse {
   scope?: string;
 }
 
-interface GmailProfileResponse {
-  emailAddress?: string;
-}
-
-interface MicrosoftProfileResponse {
-  mail?: string;
-  userPrincipalName?: string;
-}
-
 @Injectable()
 export class EmailOAuthService {
   private readonly logger = new Logger(EmailOAuthService.name);
@@ -151,7 +142,7 @@ export class EmailOAuthService {
     );
 
     const { access_token, refresh_token, expires_in, scope } = tokenResponse.data;
-    const profileResponse = await axios.get<GmailProfileResponse>(
+    const profileResponse = await axios.get(
       'https://gmail.googleapis.com/gmail/v1/users/me/profile',
       {
         headers: { Authorization: `Bearer ${access_token}` },
@@ -198,7 +189,7 @@ export class EmailOAuthService {
     const { access_token, refresh_token, expires_in, scope: grantedScope } =
       tokenResponse.data;
 
-    const profileResponse = await axios.get<MicrosoftProfileResponse>(
+    const profileResponse = await axios.get(
       'https://graph.microsoft.com/v1.0/me',
       { headers: { Authorization: `Bearer ${access_token}` } },
     );

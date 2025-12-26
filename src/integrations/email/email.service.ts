@@ -577,7 +577,7 @@ export class EmailService {
       .replace(/=+$/, '');
 
     if (draftOnly) {
-      const response = await axios.post<GmailDraftResponse>(
+      const response = await axios.post(
         'https://gmail.googleapis.com/gmail/v1/users/me/drafts',
         { message: { raw } },
         { headers: { Authorization: `Bearer ${accessToken}` } },
@@ -590,7 +590,7 @@ export class EmailService {
       };
     }
 
-    const response = await axios.post<GmailSendResponse>(
+    const response = await axios.post(
       'https://gmail.googleapis.com/gmail/v1/users/me/messages/send',
       { raw },
       { headers: { Authorization: `Bearer ${accessToken}` } },
@@ -620,7 +620,7 @@ export class EmailService {
       qParts.push('is:unread');
     }
 
-    const listResponse = await axios.get<GmailMessageListResponse>(
+    const listResponse = await axios.get(
       'https://gmail.googleapis.com/gmail/v1/users/me/messages',
       {
         headers: { Authorization: `Bearer ${accessToken}` },
@@ -635,7 +635,7 @@ export class EmailService {
     const emails: EmailMessage[] = [];
 
     for (const message of messages) {
-      const detailResponse = await axios.get<GmailMessageDetailResponse>(
+      const detailResponse = await axios.get(
         `https://gmail.googleapis.com/gmail/v1/users/me/messages/${message.id}`,
         {
           headers: { Authorization: `Bearer ${accessToken}` },
