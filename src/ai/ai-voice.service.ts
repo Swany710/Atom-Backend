@@ -78,7 +78,7 @@ export class AIVoiceService {
     ];
 
     const completion = await this.openai.chat.completions.create({
-      model: 'gpt-4.1-mini',
+      model: 'gpt-4o-mini',
       messages,
       max_tokens: 500,
       temperature: 0.7,
@@ -196,6 +196,11 @@ export class AIVoiceService {
                 type: 'string',
                 description: 'Email body content'
               },
+              provider: {
+                type: 'string',
+                enum: ['gmail', 'outlook'],
+                description: 'Email provider to use for sending'
+              },
               draft_only: {
                 type: 'boolean',
                 description: 'If true, create a draft instead of sending'
@@ -279,7 +284,7 @@ export class AIVoiceService {
 
     // First call to OpenAI with tools
     let completion = await this.openai.chat.completions.create({
-      model: 'gpt-4.1-mini',
+      model: 'gpt-4o-mini',
       messages,
       tools,
       tool_choice: 'auto',
@@ -326,7 +331,7 @@ export class AIVoiceService {
 
       // Second call to OpenAI with function results
       completion = await this.openai.chat.completions.create({
-        model: 'gpt-4.1-mini',
+        model: 'gpt-4o-mini',
         messages,
         max_tokens: 1000,
         temperature: 0.7,
@@ -428,6 +433,7 @@ export class AIVoiceService {
       args.bcc,
       args.html,
       sessionId,
+      args.provider,
     );
   }
 
