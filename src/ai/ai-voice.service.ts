@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import OpenAI from 'openai';
 import type {
@@ -6,6 +6,8 @@ import type {
   ChatCompletionTool,
   ChatCompletionMessageToolCall
 } from 'openai/resources/chat/completions';
+import { EMAIL_PROVIDER } from '../integrations/email/email.provider';
+import type { EmailProvider } from '../integrations/email/email.provider';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ChatMemory } from './chat-memory.entity';
@@ -34,6 +36,8 @@ export class AIVoiceService {
     private readonly chatRepo: Repository<ChatMemory>,
     private readonly calendarService: CalendarService,
     private readonly emailService: EmailService,
+    @Inject(EMAIL_PROVIDER) 
+    private readonly email: EmailProvider,
   ) {
     this.openai = new OpenAI({
       apiKey: this.config.get<string>('OPENAI_API_KEY'),
