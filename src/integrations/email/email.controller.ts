@@ -8,17 +8,11 @@ import {
   Body,
   Inject,
 } from '@nestjs/common';
-// Import services and types from the src/integrations directory.  The controller
-// lives at the project root, so we import from the nested source folder rather
-// than from the same directory.  These imports ensure the correct files are
-// referenced without altering application structure.
-import { EmailOAuthService } from './src/integrations/email/email-oauth.service';
-import { EmailProvider, emailProviders } from './src/integrations/email/email.types';
 
-// Import the EMAIL_PROVIDER token to inject the configured email service.
-import { EMAIL_PROVIDER } from './src/integrations/email/email.module';
+import { EmailOAuthService } from './email-oauth.service';
+import { EmailProvider, emailProviders } from './email.types';
+import { EMAIL_PROVIDER } from './email.module';
 
-// Data transfer object for sending emails. The 'to' field is required.
 class SendEmailDto {
   to!: string[];
   subject!: string;
@@ -41,10 +35,7 @@ export class EmailController {
     @Param('provider') provider: EmailProvider,
     @Query('userId') userId: string,
   ) {
-    if (!userId) {
-      throw new BadRequestException('userId is required.');
-    }
-
+    if (!userId) throw new BadRequestException('userId is required.');
     return {
       provider,
       authUrl: this.emailOAuthService.getAuthUrl(provider, userId),
@@ -60,16 +51,9 @@ export class EmailController {
     if (!emailProviders.includes(provider)) {
       throw new BadRequestException('Unsupported provider.');
     }
+    if (!code) throw new BadRequestException('code is required.');
 
-    if (!code) {
-      throw new BadRequestException('code is required.');
-    }
-
-    const connection = await this.emailOAuthService.handleCallback(
-      provider,
-      code,
-      state,
-    );
+    const connection = await this.emailOAuthService.handleCallback(provider, code, state);
 
     return {
       success: true,
@@ -83,19 +67,16 @@ export class EmailController {
     @Param('provider') provider: EmailProvider,
     @Query('userId') userId: string,
   ) {
-    if (!userId) {
-      throw new BadRequestException('userId is required.');
-    }
-
+    if (!userId) throw new BadRequestException('userId is required.');
     return this.emailOAuthService.getConnectionStatus(provider, userId);
   }
 
-  // Send an email via the configured provider.
   @Post('send')
   async sendEmail(@Body() dto: SendEmailDto) {
     if (!dto.to || dto.to.length === 0) {
       throw new BadRequestException('Recipient list (to) must not be empty');
     }
+
     return this.emailService.sendEmail(
       dto.to,
       dto.subject,
@@ -107,10 +88,6 @@ export class EmailController {
     );
   }
 
-  // Retrieve recent emails. Supports optional query parameters:
-  // - maxResults: number of messages to return (default 10)
-  // - query: search query (Gmail search syntax)
-  // - unreadOnly: whether to filter for unread messages
   @Get('read')
   async readEmails(
     @Query('maxResults') maxResults?: string,
@@ -122,8 +99,6 @@ export class EmailController {
     return this.emailService.readEmails(max, query, unread);
   }
 
-  // Reply to an email. Accepts messageId and body in the request body.
-  // Optional replyAll flag sends the reply to all recipients.
   @Post('reply')
   async replyToEmail(
     @Body('messageId') messageId: string,
