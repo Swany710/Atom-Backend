@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 
 import { EmailService as OutlookEmailService } from './email.service';
 import { GmailService } from './gmail.service';
+import { EmailService } from './email.facade.service';
 
 import { EmailOAuthService } from './email-oauth.service';
 import { EmailOAuthController } from './email-oauth.controller';
