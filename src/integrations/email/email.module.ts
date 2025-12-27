@@ -1,14 +1,18 @@
 import { Module, Provider } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
+
 import { EmailService as OutlookEmailService } from './email.service';
 import { GmailService } from './gmail.service';
 
+import { EmailOAuthService } from './email-oauth.service';
+import { EmailOAuthController } from './email-oauth.controller';
+import { EmailController } from './email.controller';
+
+import { EmailConnection } from './email-connection.entity';
+
 export const EMAIL_PROVIDER = 'EMAIL_PROVIDER';
 
-// Factory provider that returns either the Outlook service or the Gmail
-// service depending on the EMAIL_PROVIDER environment variable. The default
-// is 'outlook'. See README or deployment configuration for details on
-// specifying the provider.
 const emailProviderFactory: Provider = {
   provide: EMAIL_PROVIDER,
   useFactory: (
@@ -17,16 +21,11 @@ const emailProviderFactory: Provider = {
     gmailService: GmailService,
   ) => {
     const provider = (config.get<string>('EMAIL_PROVIDER') || 'outlook').toLowerCase();
-    if (provider === 'gmail') {
-      return gmailService;
-    }
+    if (provider === 'gmail') return gmailService;
     return outlookService;
   },
   inject: [ConfigService, OutlookEmailService, GmailService],
 };
-import { EmailOAuthService } from './email-oauth.service';
-import { EmailOAuthController } from './email-oauth.controller';
-import { EmailController } from './email.controller';
 
 @Module({
   imports: [TypeOrmModule.forFeature([EmailConnection])],
