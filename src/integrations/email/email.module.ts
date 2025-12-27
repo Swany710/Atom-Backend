@@ -1,4 +1,4 @@
-import { Module, Provider } from '@nestjs/common';
+limport { Module, Provider } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 
@@ -29,7 +29,7 @@ const emailProviderFactory: Provider = {
 
 @Module({
   imports: [TypeOrmModule.forFeature([EmailConnection])],
-  providers: [OutlookEmailService, GmailService, emailProviderFactory, EmailOAuthService],
+  providers: [EmailService, OutlookEmailService, GmailService, emailProviderFactory, EmailOAuthService],
   controllers: [EmailOAuthController, EmailController],
   exports: [OutlookEmailService, EMAIL_PROVIDER],
 })
