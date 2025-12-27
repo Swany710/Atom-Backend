@@ -29,8 +29,8 @@ const emailProviderFactory: Provider = {
 
 @Module({
   imports: [TypeOrmModule.forFeature([EmailConnection])],
-  providers: [EmailService, OutlookEmailService, GmailService, emailProviderFactory, EmailOAuthService],
+  providers: [OutlookEmailService, GmailService, emailProviderFactory, EmailOAuthService],
   controllers: [EmailOAuthController, EmailController],
-  exports: [EmailService],
+  exports: [OutlookEmailService, EMAIL_PROVIDER],
 })
 export class EmailModule {}
