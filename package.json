@@ -1,10 +1,9 @@
 {
-  "name": "construction-assistant-backend",
+    "name": "atom-backend",
   "version": "1.0.0",
-  "description": "Construction Assistant API with AI Voice Processing",
+    "description": "Atom AI Personal Assistant - Backend API",
   "main": "dist/main.js",
   "scripts": {
-    "postinstall": "apt-get update && apt-get install -y ffmpeg || true",
     "build": "nest build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
