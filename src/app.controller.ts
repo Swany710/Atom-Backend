@@ -15,6 +15,8 @@ import { Repository } from 'typeorm';
 import { AIVoiceService } from './ai/ai-voice.service';
 import { ChatMemory } from './ai/chat-memory.entity';
 
+// AppController owns conversation history and multipart voice uploads.
+// Text chat and health/status live in AIVoiceController (/api/v1/ai/*).
 @Controller('api/v1')
 export class AppController {
   constructor(
@@ -24,90 +26,6 @@ export class AppController {
     private readonly chatRepo: Repository<ChatMemory>,
   ) {}
 
-  /* --------------------------------------------------------- */
-  /*  Health + status                                           */
-  /* --------------------------------------------------------- */
-  @Get('ai/health')
-  getHealth() {
-    return {
-      status: 'healthy',
-      service: 'Atom Backend API',
-      timestamp: new Date(),
-    };
-  }
-
-  @Get('ai/status')
-  getStatus() {
-    const ok = !!this.config.get('OPENAI_API_KEY');
-    return {
-      status: ok ? 'available' : 'configuration_error',
-      aiService: ok ? 'online' : 'offline',
-      timestamp: new Date(),
-    };
-  }
-
-  /* --------------------------------------------------------- */
-  /*  Text                                                     */
-  /* --------------------------------------------------------- */
-  @Post('ai/text-command1')
-  async handleText(
-    @Body() body: { message: string; userId?: string; conversationId?: string },
-  ) {
-    const sessionId = body.conversationId ?? body.userId ?? 'default-user';
-    const reply = await this.aiVoiceService.processPrompt(
-      body.message,
-      sessionId,
-    );
-
-    return {
-      message: reply,
-      conversationId: sessionId,
-      timestamp: new Date(),
-      mode: 'openai',
-    };
-  }
-
-  /* --------------------------------------------------------- */
-  /*  Voice                                                    */
-  /* --------------------------------------------------------- */
-  @Post('ai/voice-command1')
-  @UseInterceptors(FileInterceptor('audio'))
-  async handleVoice(
-    @UploadedFile() file: Express.Multer.File,
-    @Body() body: { userId?: string; conversationId?: string },
-  ) {
-    if (!file?.buffer || file.size < 1_000) {
-      return {
-        message:
-          'Audio recording is too short — please speak for at least one second.',
-        transcription: '[Too Short]',
-        conversationId: body.conversationId ?? body.userId ?? 'voice-error',
-        timestamp: new Date(),
-        mode: 'error',
-      };
-    }
-
-    const userId = body.userId ?? 'default-user';
-    const convoId = body.conversationId ?? userId; // 🔑  keep entire voice thread
-
-    const result = await this.aiVoiceService.processVoiceCommand(
-      file.buffer,
-      userId,
-      convoId,
-    );
-
-    return {
-      message: result.response,
-      transcription: result.transcription,
-      conversationId: result.conversationId, // same as convoId
-      timestamp: new Date(),
-      mode: 'openai',
-    };
-  }
-
-  /* --------------------------------------------------------- */
-  /*  Conversation history endpoints                           */
-  /* --------------------------------------------------------- */
   @Get('ai/conversations/:id')
   async getConversation(@Param('id') id: string) {
     const messages = await this.chatRepo.find({
@@ -121,5 +39,30 @@ export class AppController {
   async clearConversation(@Param('id') id: string) {
     await this.chatRepo.delete({ sessionId: id });
     return { message: 'Conversation cleared', conversationId: id };
+  }
+
+  @Post('ai/voice-command')
+  @UseInterceptors(FileInterceptor('audio'))
+  async handleVoice(
+    @UploadedFile() file: Express.Multer.File,
+    @Body() body: { userId?: string; conversationId?: string },
+  ) {
+    if (!file?.buffer || file.size < 1_000) {
+      return {
+        message: 'Audio too short — please speak for at least one second.',
+        transcription: '[Too Short]',
+        conversationId: body.conversationId ?? body.userId ?? 'voice-error',
+        timestamp: new Date(),
+      };
+    }
+    const userId = body.userId ?? 'default-user';
+    const convoId = body.conversationId ?? userId;
+    const result = await this.aiVoiceService.processVoiceCommand(file.buffer, userId, convoId);
+    return {
+      message: result.response,
+      transcription: result.transcription,
+      conversationId: result.conversationId,
+      timestamp: new Date(),
+    };
   }
 }
