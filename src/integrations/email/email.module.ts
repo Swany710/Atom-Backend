@@ -4,35 +4,34 @@ import { ConfigService } from '@nestjs/config';
 
 import { EmailService as OutlookEmailService } from './email.service';
 import { GmailService } from './gmail.service';
-import { EmailService } from './email.facade.service';
 
 import { EmailOAuthService } from './email-oauth.service';
 import { EmailOAuthController } from './email-oauth.controller';
 import { EmailController } from './email.controller';
 
 import { EmailConnection } from './email-connection.entity';
-import { emailProviderFactory, EMAIL_PROVIDER } from './email.provider';
 
+// Single source of truth for the injection token
 export const EMAIL_PROVIDER = 'EMAIL_PROVIDER';
 
 const emailProviderFactory: Provider = {
-  provide: EMAIL_PROVIDER,
-  useFactory: (
-    config: ConfigService,
-    outlookService: OutlookEmailService,
-    gmailService: GmailService,
-  ) => {
-    const provider = (config.get<string>('EMAIL_PROVIDER') || 'outlook').toLowerCase();
-    if (provider === 'gmail') return gmailService;
-    return outlookService;
-  },
-  inject: [ConfigService, OutlookEmailService, GmailService],
+    provide: EMAIL_PROVIDER,
+    useFactory: (
+          config: ConfigService,
+          outlookService: OutlookEmailService,
+          gmailService: GmailService,
+        ) => {
+              const provider = (config.get<string>('EMAIL_PROVIDER') || 'outlook').toLowerCase();
+              if (provider === 'gmail') return gmailService;
+              return outlookService;
+        },
+    inject: [ConfigService, OutlookEmailService, GmailService],
 };
 
 @Module({
-  imports: [TypeOrmModule.forFeature([EmailConnection])],
-  providers: [OutlookEmailService, GmailService, emailProviderFactory, EmailOAuthService],
-  controllers: [EmailOAuthController, EmailController],
-  exports: [EMAIL_PROVIDER],
+    imports: [TypeOrmModule.forFeature([EmailConnection])],
+    providers: [OutlookEmailService, GmailService, emailProviderFactory, EmailOAuthService],
+    controllers: [EmailOAuthController, EmailController],
+    exports: [EMAIL_PROVIDER],
 })
-export class EmailModule {}
+  export class EmailModule {}
