@@ -19,9 +19,16 @@ import { EmailModule } from './integrations/email/email.module';
         url: process.env.DATABASE_URL,
         synchronize: true,
         autoLoadEntities: true,
+        ssl: process.env.DATABASE_URL?.includes('supabase') || process.env.DATABASE_SSL === 'true'
+          ? { rejectUnauthorized: false }
+          : false,
+        extra: {
+          max: 5,
+          connectionTimeoutMillis: 10000,
+        },
       }),
     }),
-    TypeOrmModule.forFeature([ChatMemory]), // ✅ This enables repo in AppController
+    TypeOrmModule.forFeature([ChatMemory]),
     AIVoiceModule,
     EmailModule,
   ],

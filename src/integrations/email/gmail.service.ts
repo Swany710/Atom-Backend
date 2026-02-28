@@ -1,9 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { google } from 'googleapis';
 
 @Injectable()
 export class GmailService {
+  private readonly logger = new Logger(GmailService.name);
   private readonly oauth2Client;
 
   constructor(private readonly config: ConfigService) {
@@ -12,14 +13,14 @@ export class GmailService {
     const redirectUri = this.config.get<string>('GOOGLE_REDIRECT_URI');
 
     if (!clientId || !clientSecret || !redirectUri) {
-      throw new Error(
-        'Missing GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REDIRECT_URI env vars',
+      this.logger.warn(
+        'Missing GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REDIRECT_URI — Gmail features disabled.',
       );
+      return;
     }
 
     this.oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
 
-    // If you're using refresh-token mode initially:
     const refreshToken = this.config.get<string>('GOOGLE_REFRESH_TOKEN');
     if (refreshToken) {
       this.oauth2Client.setCredentials({ refresh_token: refreshToken });
@@ -115,8 +116,6 @@ export class GmailService {
   }
 
   async replyToEmail(messageId: string, body: string, replyAll = false) {
-    // Minimal “works now” implementation: just sends a new message with `In-Reply-To`.
-    // (Threading can be improved later by fetching headers + threadId)
     const msg = await this.gmail().users.messages.get({
       userId: 'me',
       id: messageId,
@@ -134,7 +133,6 @@ export class GmailService {
 
     if (!toHeader) throw new Error('Unable to determine reply recipient');
 
-    // crude parse: "Name <email@x.com>" OR "email@x.com"
     const toEmail = toHeader.includes('<')
       ? toHeader.split('<')[1].split('>')[0].trim()
       : toHeader.trim();

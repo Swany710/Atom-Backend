@@ -9,9 +9,11 @@ import {
   HttpException,
   HttpStatus,
   Query,
+  Response,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AIVoiceService } from './ai-voice.service';
+import type { Response as ExpressResponse } from 'express';
 
 interface TextCommandRequest {
   message: string;
@@ -112,9 +114,11 @@ export class AIVoiceController {
   @UseInterceptors(FileInterceptor('audio'))
   async handleVoiceCommand(
     @UploadedFile() file: MulterFile,
+    @Response() res: ExpressResponse,
     @Query('userId') userId: string = 'default-user',
-    @Query('conversationId') conversationId?: string
-  ): Promise<VoiceCommandResponse> {
+    @Query('conversationId') conversationId?: string,
+    @Query('returnAudio') returnAudio: string = 'true',
+  ): Promise<void> {
     if (!file) {
       throw new BadRequestException('Audio file is required');
     }
@@ -126,12 +130,24 @@ export class AIVoiceController {
         conversationId
       );
 
-      return {
+      // If client wants audio and TTS was generated, return it
+      if (returnAudio === 'true' && result.audioResponse) {
+        res.setHeader('Content-Type', 'audio/mpeg');
+        res.setHeader('X-Transcription', result.transcription || '');
+        res.setHeader('X-Response-Text', result.response || '');
+        res.setHeader('X-Conversation-Id', result.conversationId || '');
+        res.send(result.audioResponse);
+        return;
+      }
+
+      // Otherwise return JSON
+      const response: VoiceCommandResponse = {
         message: result.response,
-        transcription: result.transcription,
+        transcription: result.transcription || '',
         conversationId: result.conversationId,
         timestamp: new Date(),
       };
+      res.json(response);
     } catch (error) {
       console.error('Voice command error:', error);
       throw new HttpException(

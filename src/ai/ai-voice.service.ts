@@ -1,11 +1,8 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import OpenAI from 'openai';
-import type {
-  ChatCompletionMessageParam,
-  ChatCompletionTool,
-  ChatCompletionMessageToolCall
-} from 'openai/resources/chat/completions';
+import Anthropic from '@anthropic-ai/sdk';
+import type { MessageParam } from '@anthropic-ai/sdk/resources/messages';
 import { EMAIL_PROVIDER } from '../integrations/email/email.provider';
 import type { EmailProvider } from '../integrations/email/email.provider';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -22,12 +19,14 @@ interface ProcessResult {
   response: string;
   conversationId: string;
   transcription?: string;
+  audioResponse?: Buffer;
   toolCalls?: Array<{ tool: string; args: any; result: any }>;
 }
 
 @Injectable()
 export class AIVoiceService {
   private readonly openai: OpenAI;
+  private readonly anthropic: Anthropic;
   private readonly logger = new Logger(AIVoiceService.name);
 
   constructor(
@@ -41,6 +40,9 @@ export class AIVoiceService {
   ) {
     this.openai = new OpenAI({
       apiKey: this.config.get<string>('OPENAI_API_KEY'),
+    });
+    this.anthropic = new Anthropic({
+      apiKey: this.config.get<string>('ANTHROPIC_API_KEY'),
     });
   }
 
@@ -60,208 +62,156 @@ export class AIVoiceService {
     Be proactive, concise, and helpful. Today's date is ${today}.`.trim();
   }
 
-  /** Build a message array (last-10 turns) and call OpenAI */
-  private async runChatCompletion(
-    sessionId: string,
-    userPrompt: string,
-  ): Promise<string> {
-    const history = await this.chatRepo.find({
-      where: { sessionId },
-      order: { createdAt: 'DESC' },
-      take: 10,
-    });
-    history.reverse(); // oldest → newest
-
-    const messages: ChatCompletionMessageParam[] = [
-      { role: 'system', content: this.systemPrompt },
-      ...history.map((m) => ({
-        role: m.role as 'user' | 'assistant',
-        content: m.content,
-      })),
-      { role: 'user', content: userPrompt },
-    ];
-
-    const completion = await this.openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages,
-      max_tokens: 500,
-      temperature: 0.7,
-    });
-
-    return (
-      completion.choices[0]?.message?.content?.trim() ??
-      'I am sorry, I could not generate a response.'
-    );
-  }
-
   /* ---------------------------------------------------------------------
-   *  Function Calling - Tool Definitions
+   *  Tool Definitions (Anthropic format)
    * ------------------------------------------------------------------- */
-  private getToolDefinitions(): ChatCompletionTool[] {
+  private getToolDefinitions(): Anthropic.Messages.Tool[] {
     return [
       {
-        type: 'function',
-        function: {
-          name: 'search_knowledge_base',
-          description: 'Search the user\'s knowledge base for company documents, project information, notes, or any stored information. Use this when the user asks about specific projects, documents, or company information.',
-          parameters: {
-            type: 'object',
-            properties: {
-              query: {
-                type: 'string',
-                description: 'The search query to find relevant information'
-              },
-              filter: {
-                type: 'string',
-                description: 'Optional filter (e.g., "project_name", "document_type")',
-              }
+        name: 'search_knowledge_base',
+        description: 'Search the user\'s knowledge base for company documents, project information, notes, or any stored information. Use this when the user asks about specific projects, documents, or company information.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            query: {
+              type: 'string',
+              description: 'The search query to find relevant information'
             },
-            required: ['query']
-          }
+            filter: {
+              type: 'string',
+              description: 'Optional filter (e.g., "project_name", "document_type")',
+            }
+          },
+          required: ['query']
         }
       },
       {
-        type: 'function',
-        function: {
-          name: 'check_calendar',
-          description: 'Check the user\'s calendar for events, meetings, or availability. Use this when the user asks about their schedule, meetings, or when they\'re free.',
-          parameters: {
-            type: 'object',
-            properties: {
-              start_date: {
-                type: 'string',
-                description: 'Start date in ISO format (e.g., "2024-01-15")'
-              },
-              end_date: {
-                type: 'string',
-                description: 'End date in ISO format (e.g., "2024-01-20")'
-              },
-              search_query: {
-                type: 'string',
-                description: 'Optional search term to filter events'
-              }
+        name: 'check_calendar',
+        description: 'Check the user\'s calendar for events, meetings, or availability. Use this when the user asks about their schedule, meetings, or when they\'re free.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            start_date: {
+              type: 'string',
+              description: 'Start date in ISO format (e.g., "2024-01-15")'
             },
-            required: ['start_date']
-          }
+            end_date: {
+              type: 'string',
+              description: 'End date in ISO format (e.g., "2024-01-20")'
+            },
+            search_query: {
+              type: 'string',
+              description: 'Optional search term to filter events'
+            }
+          },
+          required: ['start_date']
         }
       },
       {
-        type: 'function',
-        function: {
-          name: 'create_calendar_event',
-          description: 'Create a new calendar event or meeting. Use this when the user wants to schedule something.',
-          parameters: {
-            type: 'object',
-            properties: {
-              title: {
-                type: 'string',
-                description: 'Event title'
-              },
-              start_time: {
-                type: 'string',
-                description: 'Start time in ISO format (e.g., "2024-01-15T14:00:00")'
-              },
-              end_time: {
-                type: 'string',
-                description: 'End time in ISO format'
-              },
-              description: {
-                type: 'string',
-                description: 'Event description or notes'
-              },
-              attendees: {
-                type: 'array',
-                items: { type: 'string' },
-                description: 'List of attendee email addresses'
-              }
+        name: 'create_calendar_event',
+        description: 'Create a new calendar event or meeting. Use this when the user wants to schedule something.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            title: {
+              type: 'string',
+              description: 'Event title'
             },
-            required: ['title', 'start_time', 'end_time']
-          }
+            start_time: {
+              type: 'string',
+              description: 'Start time in ISO format (e.g., "2024-01-15T14:00:00")'
+            },
+            end_time: {
+              type: 'string',
+              description: 'End time in ISO format'
+            },
+            description: {
+              type: 'string',
+              description: 'Event description or notes'
+            },
+            attendees: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'List of attendee email addresses'
+            }
+          },
+          required: ['title', 'start_time', 'end_time']
         }
       },
       {
-        type: 'function',
-        function: {
-          name: 'send_email',
-          description: 'Send an email on behalf of the user. Use this when the user wants to send or draft an email.',
-          parameters: {
-            type: 'object',
-            properties: {
-              to: {
-                type: 'array',
-                items: { type: 'string' },
-                description: 'Recipient email addresses'
-              },
-              subject: {
-                type: 'string',
-                description: 'Email subject line'
-              },
-              body: {
-                type: 'string',
-                description: 'Email body content'
-              },
-              provider: {
-                type: 'string',
-                enum: ['gmail', 'outlook'],
-                description: 'Email provider to use for sending'
-              },
-              draft_only: {
-                type: 'boolean',
-                description: 'If true, create a draft instead of sending'
-              }
+        name: 'send_email',
+        description: 'Send an email on behalf of the user. Use this when the user wants to send or draft an email.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            to: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Recipient email addresses'
             },
-            required: ['to', 'subject', 'body']
-          }
+            subject: {
+              type: 'string',
+              description: 'Email subject line'
+            },
+            body: {
+              type: 'string',
+              description: 'Email body content'
+            },
+            provider: {
+              type: 'string',
+              enum: ['gmail', 'outlook'],
+              description: 'Email provider to use for sending'
+            },
+            draft_only: {
+              type: 'boolean',
+              description: 'If true, create a draft instead of sending'
+            }
+          },
+          required: ['to', 'subject', 'body']
         }
       },
       {
-        type: 'function',
-        function: {
-          name: 'update_crm',
-          description: 'Update customer relationship management system with customer information, notes, or status updates.',
-          parameters: {
-            type: 'object',
-            properties: {
-              customer_id: {
-                type: 'string',
-                description: 'Customer ID or email'
-              },
-              action: {
-                type: 'string',
-                enum: ['update_notes', 'update_status', 'create_contact', 'log_interaction'],
-                description: 'Action to perform in CRM'
-              },
-              data: {
-                type: 'object',
-                description: 'Data to update (varies by action)'
-              }
+        name: 'update_crm',
+        description: 'Update customer relationship management system with customer information, notes, or status updates.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            customer_id: {
+              type: 'string',
+              description: 'Customer ID or email'
             },
-            required: ['action', 'data']
-          }
+            action: {
+              type: 'string',
+              enum: ['update_notes', 'update_status', 'create_contact', 'log_interaction'],
+              description: 'Action to perform in CRM'
+            },
+            data: {
+              type: 'object',
+              description: 'Data to update (varies by action)'
+            }
+          },
+          required: ['action', 'data']
         }
       },
       {
-        type: 'function',
-        function: {
-          name: 'get_general_info',
-          description: 'Get general information or answer questions that don\'t require accessing specific tools. Use this for general knowledge, calculations, or conversational responses.',
-          parameters: {
-            type: 'object',
-            properties: {
-              query: {
-                type: 'string',
-                description: 'The user\'s question or request'
-              }
-            },
-            required: ['query']
-          }
+        name: 'get_general_info',
+        description: 'Get general information or answer questions that don\'t require accessing specific tools. Use this for general knowledge, calculations, or conversational responses.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            query: {
+              type: 'string',
+              description: 'The user\'s question or request'
+            }
+          },
+          required: ['query']
         }
       }
     ];
   }
 
   /* ---------------------------------------------------------------------
-   *  Function Calling - Main Orchestrator
+   *  Chat with Claude + Tool Use
    * ------------------------------------------------------------------- */
   private async runChatWithTools(
     sessionId: string,
@@ -272,10 +222,9 @@ export class AIVoiceService {
       order: { createdAt: 'DESC' },
       take: 10,
     });
-    history.reverse();
+    history.reverse(); // oldest → newest
 
-    const messages: ChatCompletionMessageParam[] = [
-      { role: 'system', content: this.systemPrompt },
+    const messages: MessageParam[] = [
       ...history.map((m) => ({
         role: m.role as 'user' | 'assistant',
         content: m.content,
@@ -286,65 +235,85 @@ export class AIVoiceService {
     const tools = this.getToolDefinitions();
     const toolCallsExecuted: Array<{ tool: string; args: any; result: any }> = [];
 
-    // First call to OpenAI with tools
-    let completion = await this.openai.chat.completions.create({
-      model: 'gpt-4o-mini',
+    // First call to Claude with tools
+    let response = await this.anthropic.messages.create({
+      model: 'claude-sonnet-4-5-20250929',
+      max_tokens: 1024,
+      system: this.systemPrompt,
       messages,
       tools,
-      tool_choice: 'auto',
-      max_tokens: 1000,
-      temperature: 0.7,
     });
 
-    let assistantMessage = completion.choices[0]?.message;
+    let assistantText = '';
 
     // Handle tool calls if any
-    if (assistantMessage?.tool_calls && assistantMessage.tool_calls.length > 0) {
-      this.logger.log(`AI requested ${assistantMessage.tool_calls.length} tool call(s)`);
+    while (response.stop_reason === 'tool_use') {
+      this.logger.log(`Claude requested tool use(s)`);
 
-      // Add assistant's message with tool calls to conversation
+      // Extract text and tool_use blocks from response
+      const toolUseBlocks = response.content.filter(
+        (block): block is Anthropic.Messages.ToolUseBlock => block.type === 'tool_use'
+      );
+      const textBlocks = response.content.filter(
+        (block): block is Anthropic.Messages.TextBlock => block.type === 'text'
+      );
+
+      // Capture assistant text
+      assistantText = textBlocks.map(b => b.text).join(' ');
+
+      // Add assistant's response to messages
       messages.push({
         role: 'assistant',
-        content: assistantMessage.content || '',
-        tool_calls: assistantMessage.tool_calls,
-      } as any);
+        content: response.content,
+      });
 
       // Execute each tool call
-      for (const toolCall of assistantMessage.tool_calls) {
-        const functionName = toolCall.function.name;
-        const functionArgs = JSON.parse(toolCall.function.arguments);
+      const toolResults = [];
+      for (const toolUse of toolUseBlocks) {
+        this.logger.log(`Executing tool: ${toolUse.name}`, toolUse.input);
 
-        this.logger.log(`Executing tool: ${functionName}`, functionArgs);
-
-        // Execute the function
-        const result = await this.executeFunctionCall(functionName, functionArgs, sessionId);
+        const result = await this.executeFunctionCall(
+          toolUse.name,
+          toolUse.input as any,
+          sessionId
+        );
 
         toolCallsExecuted.push({
-          tool: functionName,
-          args: functionArgs,
+          tool: toolUse.name,
+          args: toolUse.input,
           result,
         });
 
-        // Add function result to messages
-        messages.push({
-          role: 'tool',
-          tool_call_id: toolCall.id,
+        toolResults.push({
+          type: 'tool_result' as const,
+          tool_use_id: toolUse.id,
           content: JSON.stringify(result),
-        } as any);
+        });
       }
 
-      // Second call to OpenAI with function results
-      completion = await this.openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        messages,
-        max_tokens: 1000,
-        temperature: 0.7,
+      // Add tool results to messages
+      messages.push({
+        role: 'user',
+        content: toolResults as any,
       });
 
-      assistantMessage = completion.choices[0]?.message;
+      // Second call to Claude with tool results
+      response = await this.anthropic.messages.create({
+        model: 'claude-sonnet-4-5-20250929',
+        max_tokens: 1024,
+        system: this.systemPrompt,
+        messages,
+        tools,
+      });
     }
 
-    const finalResponse = assistantMessage?.content?.trim() || 'I apologize, I could not generate a response.';
+    // Extract final response
+    const finalTextBlocks = response.content.filter(
+      (block): block is Anthropic.Messages.TextBlock => block.type === 'text'
+    );
+    const finalResponse = finalTextBlocks.length > 0
+      ? finalTextBlocks.map(b => b.text).join(' ').trim()
+      : assistantText.trim() || 'I apologize, I could not generate a response.';
 
     return {
       response: finalResponse,
@@ -468,17 +437,15 @@ export class AIVoiceService {
   }
 
   /* ---------------------------------------------------------------------
-   *  Public text pipeline (NOW WITH FUNCTION CALLING!)
+   *  Public text pipeline
    * ------------------------------------------------------------------- */
   async processTextCommand(
     message: string,
     userId: string,
     conversationId?: string,
   ): Promise<ProcessResult> {
-    /** 🔑  Use one stable ID for the whole thread */
     const sessionId = conversationId ?? userId;
 
-    // Use function calling for intelligent tool selection
     const { response: reply, toolCalls } = await this.runChatWithTools(sessionId, message);
 
     await this.chatRepo.save([
@@ -493,7 +460,6 @@ export class AIVoiceService {
     };
   }
 
-  /** Back-compat helper for controllers that still invoke `processPrompt` */
   async processPrompt(prompt: string, sessionId: string): Promise<string> {
     const { response } = await this.processTextCommand(
       prompt,
@@ -504,7 +470,7 @@ export class AIVoiceService {
   }
 
   /* ---------------------------------------------------------------------
-   *  Voice pipeline
+   *  Voice pipeline with TTS
    * ------------------------------------------------------------------- */
   async processVoiceCommand(
     audioBuffer: Buffer,
@@ -515,7 +481,7 @@ export class AIVoiceService {
     await writeFile(tmpPath, audioBuffer);
 
     try {
-      // 1) Whisper transcription
+      // 1) Whisper transcription (OpenAI)
       const { text } = await this.openai.audio.transcriptions.create({
         file: createReadStream(tmpPath) as any,
         model: 'whisper-1',
@@ -523,15 +489,37 @@ export class AIVoiceService {
       const transcription = text?.trim();
       if (!transcription) throw new Error('Transcription returned empty text');
 
-      // 2) Reuse text pipeline (same session ID ⇒ full memory)
-      const result = await this.processTextCommand(
-        transcription,
-        userId,
-        conversationId ?? userId,
-      );
+      // 2) Process with Claude
+      const sessionId = conversationId ?? userId;
+      const { response: reply, toolCalls } = await this.runChatWithTools(sessionId, transcription);
 
-      // 3) Return combined payload
-      return { ...result, transcription };
+      await this.chatRepo.save([
+        { sessionId, role: 'user', content: transcription },
+        { sessionId, role: 'assistant', content: reply },
+      ]);
+
+      // 3) Generate TTS audio response (OpenAI)
+      let audioResponse: Buffer | undefined;
+      try {
+        const speechResponse = await this.openai.audio.speech.create({
+          model: 'tts-1',
+          voice: 'alloy',
+          input: reply,
+        });
+        audioResponse = Buffer.from(await speechResponse.arrayBuffer());
+        this.logger.log('TTS audio generated successfully');
+      } catch (ttsError) {
+        this.logger.warn(`TTS generation failed: ${ttsError.message}`);
+        // Continue without audio - it's optional
+      }
+
+      return {
+        response: reply,
+        conversationId: sessionId,
+        transcription,
+        audioResponse,
+        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+      };
     } finally {
       await unlink(tmpPath).catch(() =>
         this.logger.warn(`Temp file not removed: ${tmpPath}`),
