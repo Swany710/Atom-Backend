@@ -10,28 +10,26 @@ import { EmailOAuthController } from './email-oauth.controller';
 import { EmailController } from './email.controller';
 
 import { EmailConnection } from './email-connection.entity';
-
-// Single source of truth for the injection token
-export const EMAIL_PROVIDER = 'EMAIL_PROVIDER';
+import { EMAIL_PROVIDER } from './email.types';
 
 const emailProviderFactory: Provider = {
-    provide: EMAIL_PROVIDER,
-    useFactory: (
-          config: ConfigService,
-          outlookService: OutlookEmailService,
-          gmailService: GmailService,
-        ) => {
-              const provider = (config.get<string>('EMAIL_PROVIDER') || 'outlook').toLowerCase();
-              if (provider === 'gmail') return gmailService;
-              return outlookService;
-        },
-    inject: [ConfigService, OutlookEmailService, GmailService],
+      provide: EMAIL_PROVIDER,
+      useFactory: (
+              config: ConfigService,
+              outlookService: OutlookEmailService,
+              gmailService: GmailService,
+            ) => {
+                    const provider = (config.get<string>('EMAIL_PROVIDER') || 'outlook').toLowerCase();
+                    if (provider === 'gmail') return gmailService;
+                    return outlookService;
+            },
+      inject: [ConfigService, OutlookEmailService, GmailService],
 };
 
 @Module({
-    imports: [TypeOrmModule.forFeature([EmailConnection])],
-    providers: [OutlookEmailService, GmailService, emailProviderFactory, EmailOAuthService],
-    controllers: [EmailOAuthController, EmailController],
-    exports: [EMAIL_PROVIDER, OutlookEmailService],
+      imports: [TypeOrmModule.forFeature([EmailConnection])],
+      providers: [OutlookEmailService, GmailService, emailProviderFactory, EmailOAuthService],
+      controllers: [EmailOAuthController, EmailController],
+      exports: [EMAIL_PROVIDER, OutlookEmailService],
 })
-  export class EmailModule {}
+    export class EmailModule {}
