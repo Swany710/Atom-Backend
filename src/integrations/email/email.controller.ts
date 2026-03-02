@@ -10,7 +10,8 @@ import {
 } from '@nestjs/common';
 
 import { EmailOAuthService } from './email-oauth.service';
-import { EmailProvider, emailProviders, EMAIL_PROVIDER } from './email.types';
+import { EmailProviderName, emailProviderNames } from './email.types';
+import { EMAIL_PROVIDER } from './email.provider';
 
 class SendEmailDto {
     to!: string[];
@@ -31,7 +32,7 @@ class SendEmailDto {
 
   @Get(':provider/auth-url')
     getAuthUrl(
-          @Param('provider') provider: EmailProvider,
+          @Param('provider') provider: EmailProviderName,
           @Query('userId') userId: string,
         ) {
           if (!userId) throw new BadRequestException('userId is required.');
@@ -43,11 +44,11 @@ class SendEmailDto {
 
   @Get(':provider/callback')
     async handleCallback(
-          @Param('provider') provider: EmailProvider,
+          @Param('provider') provider: EmailProviderName,
           @Query('code') code: string,
           @Query('state') state: string,
         ) {
-          if (!emailProviders.includes(provider)) {
+          if (!emailProviderNames.includes(provider)) {
                   throw new BadRequestException('Unsupported provider.');
           }
           if (!code) throw new BadRequestException('code is required.');
@@ -63,7 +64,7 @@ class SendEmailDto {
 
   @Get(':provider/status')
     async getStatus(
-          @Param('provider') provider: EmailProvider,
+          @Param('provider') provider: EmailProviderName,
           @Query('userId') userId: string,
         ) {
           if (!userId) throw new BadRequestException('userId is required.');

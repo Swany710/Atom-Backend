@@ -6,7 +6,7 @@ import {
   UpdateDateColumn,
   Index,
 } from 'typeorm';
-import { EmailProvider } from './email.types';
+import { EmailProviderName } from './email.types';
 
 @Entity('email_connections')
 @Index(['userId', 'provider'], { unique: true })
@@ -18,7 +18,7 @@ export class EmailConnection {
   userId: string;
 
   @Column()
-  provider: EmailProvider;
+  provider: EmailProviderName;
 
   @Column({ nullable: true })
   emailAddress?: string;

@@ -3,13 +3,11 @@ import { ConfigService } from '@nestjs/config';
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
 import type { MessageParam } from '@anthropic-ai/sdk/resources/messages';
-import { EMAIL_PROVIDER } from '../integrations/email/email.provider';
-import type { EmailProvider } from '../integrations/email/email.provider';
+import { EMAIL_PROVIDER, IEmailService } from '../integrations/email/email.provider';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ChatMemory } from './chat-memory.entity';
 import { CalendarService } from '../integrations/calendar/calendar.service';
-import { EmailService } from '../integrations/email/email.service';
 import * as path from 'path';
 import * as os from 'os';
 import { writeFile, unlink } from 'fs/promises';
@@ -34,9 +32,8 @@ export class AIVoiceService {
     @InjectRepository(ChatMemory)
     private readonly chatRepo: Repository<ChatMemory>,
     private readonly calendarService: CalendarService,
-    private readonly emailService: EmailService,
-    @Inject(EMAIL_PROVIDER) 
-    private readonly email: EmailProvider,
+    @Inject(EMAIL_PROVIDER)
+    private readonly emailService: IEmailService,
   ) {
     this.openai = new OpenAI({
       apiKey: this.config.get<string>('OPENAI_API_KEY'),
@@ -406,7 +403,6 @@ export class AIVoiceService {
       args.bcc,
       args.html,
       sessionId,
-      args.provider,
     );
   }
 

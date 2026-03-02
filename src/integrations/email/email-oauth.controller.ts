@@ -1,6 +1,6 @@
 import { Controller, Get, Query, Res, HttpStatus } from '@nestjs/common';
 import { EmailOAuthService } from './email-oauth.service';
-import { EmailProvider } from './email.types';
+import { EmailProviderName } from './email.types';
 
 /**
  * Controller to handle OAuth-related HTTP endpoints for email providers.
@@ -12,7 +12,7 @@ export class EmailOAuthController {
   /** Generate an authorization URL for the specified email provider. */
   @Get('url')
   getAuthUrl(
-    @Query('provider') provider: EmailProvider,
+    @Query('provider') provider: EmailProviderName,
     @Query('userId') userId: string,
   ) {
     return this.emailOAuthService.getAuthUrl(provider, userId);
@@ -24,7 +24,7 @@ export class EmailOAuthController {
    */
   @Get('callback')
   async handleCallback(
-    @Query('provider') provider: EmailProvider,
+    @Query('provider') provider: EmailProviderName,
     @Query('code') code: string,
     @Query('state') state: string,
     @Res() res: any,
@@ -36,7 +36,7 @@ export class EmailOAuthController {
   /** Check whether a user has an active email connection for the given provider. */
   @Get('status')
   async getStatus(
-    @Query('provider') provider: EmailProvider,
+    @Query('provider') provider: EmailProviderName,
     @Query('userId') userId: string,
   ) {
     return this.emailOAuthService.getConnectionStatus(provider, userId);

@@ -7,7 +7,7 @@ import { Repository } from 'typeorm';
 import axios from 'axios';
 import 'isomorphic-fetch';
 import { EmailConnection } from './email-connection.entity';
-import { EmailProvider } from './email.types';
+import { EmailProviderName } from './email.types';
 
 export interface EmailMessage {
   id?: string;
@@ -129,7 +129,7 @@ export class EmailService {
     bcc?: string[],
     html?: string,
     userId?: string,
-    provider?: EmailProvider,
+    provider?: EmailProviderName,
   ): Promise<SendEmailResult> {
     try {
       const resolvedProvider = await this.resolveProvider(userId, provider);
@@ -174,7 +174,7 @@ export class EmailService {
     query?: string,
     unreadOnly: boolean = false,
     userId?: string,
-    provider?: EmailProvider,
+    provider?: EmailProviderName,
   ): Promise<ReadEmailsResult> {
     try {
       const resolvedProvider = await this.resolveProvider(userId, provider);
@@ -202,7 +202,7 @@ export class EmailService {
     replyBody: string,
     replyAll: boolean = false,
     userId?: string,
-    provider?: EmailProvider,
+    provider?: EmailProviderName,
   ): Promise<SendEmailResult> {
     try {
       const resolvedProvider = await this.resolveProvider(userId, provider);
@@ -241,7 +241,7 @@ export class EmailService {
     messageId: string,
     markAsRead: boolean = true,
     userId?: string,
-    provider?: EmailProvider,
+    provider?: EmailProviderName,
   ): Promise<{ success: boolean; message?: string; error?: string }> {
     try {
       const resolvedProvider = await this.resolveProvider(userId, provider);
@@ -278,7 +278,7 @@ export class EmailService {
     messageId: string,
     permanent: boolean = false,
     userId?: string,
-    provider?: EmailProvider,
+    provider?: EmailProviderName,
   ): Promise<{ success: boolean; message?: string; error?: string }> {
     try {
       const resolvedProvider = await this.resolveProvider(userId, provider);
@@ -327,7 +327,7 @@ export class EmailService {
     toRecipients: string[],
     comment?: string,
     userId?: string,
-    provider?: EmailProvider,
+    provider?: EmailProviderName,
   ): Promise<SendEmailResult> {
     try {
       const resolvedProvider = await this.resolveProvider(userId, provider);
@@ -372,7 +372,7 @@ export class EmailService {
     searchQuery: string,
     maxResults: number = 20,
     userId?: string,
-    provider?: EmailProvider,
+    provider?: EmailProviderName,
   ): Promise<ReadEmailsResult> {
     try {
       const resolvedProvider = await this.resolveProvider(userId, provider);
@@ -422,8 +422,8 @@ export class EmailService {
 
   private async resolveProvider(
     userId?: string,
-    provider?: EmailProvider,
-  ): Promise<EmailProvider> {
+    provider?: EmailProviderName,
+  ): Promise<EmailProviderName> {
     if (provider) {
       return provider;
     }

@@ -4,7 +4,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import axios from 'axios';
 import { EmailConnection } from './email-connection.entity';
-import { EmailProvider, emailProviders } from './email.types';
+import { EmailProviderName, emailProviderNames } from './email.types';
 
 /**
  * Shape of the profile returned from the Gmail API. The Gmail `users.me.profile`
@@ -53,7 +53,7 @@ export class EmailOAuthService {
     private readonly connectionRepo: Repository<EmailConnection>,
   ) {}
 
-  getAuthUrl(provider: EmailProvider, userId: string): string {
+  getAuthUrl(provider: EmailProviderName, userId: string): string {
     this.validateProvider(provider);
 
     if (provider === 'gmail') {
@@ -64,7 +64,7 @@ export class EmailOAuthService {
   }
 
   async handleCallback(
-    provider: EmailProvider,
+    provider: EmailProviderName,
     code: string,
     state: string,
   ): Promise<EmailConnection> {
@@ -78,7 +78,7 @@ export class EmailOAuthService {
     return this.exchangeMicrosoftCode(payload.userId, code);
   }
 
-  async getConnectionStatus(provider: EmailProvider, userId: string) {
+  async getConnectionStatus(provider: EmailProviderName, userId: string) {
     this.validateProvider(provider);
     const connection = await this.connectionRepo.findOne({
       where: { userId, provider },
@@ -91,8 +91,8 @@ export class EmailOAuthService {
     };
   }
 
-  private validateProvider(provider: EmailProvider) {
-    if (!emailProviders.includes(provider)) {
+  private validateProvider(provider: EmailProviderName) {
+    if (!emailProviderNames.includes(provider)) {
       throw new BadRequestException('Unsupported email provider.');
     }
   }
@@ -276,18 +276,18 @@ export class EmailOAuthService {
     return configured ? configured.split(',').map(scope => scope.trim()) : defaultScopes;
   }
 
-  private encodeState(payload: { userId: string; provider: EmailProvider }): string {
+  private encodeState(payload: { userId: string; provider: EmailProviderName }): string {
     return Buffer.from(JSON.stringify(payload)).toString('base64url');
   }
 
-  private parseState(state: string, provider: EmailProvider) {
+  private parseState(state: string, provider: EmailProviderName) {
     if (!state) {
       throw new BadRequestException('Missing OAuth state.');
     }
 
     try {
       const decoded = Buffer.from(state, 'base64url').toString('utf-8');
-      const payload = JSON.parse(decoded) as { userId: string; provider: EmailProvider };
+      const payload = JSON.parse(decoded) as { userId: string; provider: EmailProviderName };
 
       if (!payload.userId || payload.provider !== provider) {
         throw new Error('Invalid state payload');

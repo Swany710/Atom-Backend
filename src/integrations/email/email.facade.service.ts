@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { EMAIL_PROVIDER } from './email.types';
+import { EMAIL_PROVIDER } from './email.provider';
 import { EmailService as OutlookEmailService } from './email.service';
 import { GmailService } from './gmail.service';
 
