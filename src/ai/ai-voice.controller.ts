@@ -108,11 +108,16 @@ export class AIVoiceController {
   // ── Voice ─────────────────────────────────────────────────────────────────
   /**
    * POST /api/v1/ai/voice
-   * Multipart form-data: audio file in field "audio"
-   * Query params: userId?, conversationId?, returnAudio=true|false
+   * Multipart form-data fields:
+   *   audio          – audio file (required)
+   *   userId         – optional, defaults to 'default-user'
+   *   conversationId – optional; pass to continue a thread
    *
-   * Returns audio/mpeg when returnAudio=true and TTS succeeded;
-   * otherwise returns JSON VoiceResponse.
+   * Query param:
+   *   returnAudio=true  – respond with audio/mpeg (TTS) instead of JSON
+   *                       default is false (JSON)
+   *
+   * Always returns JSON unless ?returnAudio=true is explicitly set.
    * Response headers always include X-Transcription, X-Response-Text, X-Conversation-Id.
    */
   @Post('voice')
@@ -120,12 +125,29 @@ export class AIVoiceController {
   async handleVoice(
     @UploadedFile() file: MulterFile,
     @Response() res: ExpressResponse,
-    @Query('userId') userId = 'default-user',
-    @Query('conversationId') conversationId?: string,
-    @Query('returnAudio') returnAudio = 'true',
+    @Body('userId') bodyUserId?: string,
+    @Body('conversationId') bodyConversationId?: string,
+    @Query('userId') queryUserId?: string,
+    @Query('conversationId') queryConversationId?: string,
+    @Query('returnAudio') returnAudio = 'false',
   ): Promise<void> {
+    // Accept userId / conversationId from either FormData body or query string
+    const userId = bodyUserId ?? queryUserId ?? 'default-user';
+    const conversationId = bodyConversationId ?? queryConversationId;
+
     if (!file) {
-      throw new BadRequestException('Audio file is required (field name: audio)');
+      res.status(400).json({ message: 'Audio file is required (field name: audio)' });
+      return;
+    }
+
+    if (file.size < 1_000) {
+      res.json({
+        message: 'Audio too short — please speak for at least one second.',
+        transcription: '[Too Short]',
+        conversationId: conversationId ?? userId,
+        timestamp: new Date().toISOString(),
+      });
+      return;
     }
 
     try {
@@ -154,10 +176,10 @@ export class AIVoiceController {
       };
       res.json(body);
     } catch (error: any) {
-      throw new HttpException(
-        { message: 'Failed to process voice command', error: error.message },
-        HttpStatus.INTERNAL_SERVER_ERROR,
-      );
+      res.status(500).json({
+        message: 'Failed to process voice command',
+        error: error.message,
+      });
     }
   }
 }
