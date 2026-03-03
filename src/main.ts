@@ -1,6 +1,16 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 
+// ── Global safety net ──────────────────────────────────────────────────────
+// Prevent unhandled promise rejections (e.g. a tool call throwing) from
+// crashing the entire process and forcing a Railway restart.
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('⚠️  Unhandled promise rejection (process kept alive):', reason, promise);
+});
+process.on('uncaughtException', (err) => {
+  console.error('⚠️  Uncaught exception (process kept alive):', err);
+});
+
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 

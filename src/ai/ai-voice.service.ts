@@ -264,27 +264,35 @@ export class AIVoiceService {
         content: response.content,
       });
 
-      // Execute each tool call
+      // Execute each tool call — catch individual failures so one bad tool
+      // can't crash the entire voice pipeline.
       const toolResults = [];
       for (const toolUse of toolUseBlocks) {
         this.logger.log(`Executing tool: ${toolUse.name}`, toolUse.input);
 
-        const result = await this.executeFunctionCall(
-          toolUse.name,
-          toolUse.input as any,
-          sessionId
-        );
+        let result: any;
+        try {
+          result = await this.executeFunctionCall(
+            toolUse.name,
+            toolUse.input as any,
+            sessionId,
+          );
+        } catch (toolErr) {
+          const errMsg = toolErr instanceof Error ? toolErr.message : String(toolErr);
+          this.logger.error(`Tool "${toolUse.name}" threw: ${errMsg}`);
+          result = { error: errMsg, tool: toolUse.name };
+        }
 
         toolCallsExecuted.push({
-          tool: toolUse.name,
-          args: toolUse.input,
+          tool:   toolUse.name,
+          args:   toolUse.input,
           result,
         });
 
         toolResults.push({
-          type: 'tool_result' as const,
+          type:        'tool_result' as const,
           tool_use_id: toolUse.id,
-          content: JSON.stringify(result),
+          content:     JSON.stringify(result),
         });
       }
 
@@ -472,8 +480,17 @@ export class AIVoiceService {
     audioBuffer: Buffer,
     userId: string,
     conversationId?: string,
+    mimeType?: string,
   ): Promise<ProcessResult> {
-    const tmpPath = path.join(os.tmpdir(), `voice-${Date.now()}.mp3`);
+    // Use the correct extension so Whisper can infer the audio format.
+    // Browser MediaRecorder sends audio/webm (or audio/webm;codecs=opus).
+    // Default to .webm; fall back to .mp3 for legacy clients.
+    const ext = mimeType?.includes('webm') ? '.webm'
+              : mimeType?.includes('ogg')  ? '.ogg'
+              : mimeType?.includes('wav')  ? '.wav'
+              : mimeType?.includes('mp4')  ? '.mp4'
+              : '.mp3';
+    const tmpPath = path.join(os.tmpdir(), `voice-${Date.now()}${ext}`);
     await writeFile(tmpPath, audioBuffer);
 
     try {

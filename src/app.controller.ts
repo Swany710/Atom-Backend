@@ -55,14 +55,33 @@ export class AppController {
         timestamp: new Date(),
       };
     }
-    const userId = body.userId ?? 'default-user';
-    const convoId = body.conversationId ?? userId;
-    const result = await this.aiVoiceService.processVoiceCommand(file.buffer, userId, convoId);
-    return {
-      message: result.response,
-      transcription: result.transcription,
-      conversationId: result.conversationId,
-      timestamp: new Date(),
-    };
+
+    try {
+      const userId  = body.userId  ?? 'default-user';
+      const convoId = body.conversationId ?? userId;
+      // Pass the actual MIME type so the service saves the temp file with the
+      // correct extension (e.g. .webm) — Whisper infers format from extension.
+      const result = await this.aiVoiceService.processVoiceCommand(
+        file.buffer,
+        userId,
+        convoId,
+        file.mimetype,
+      );
+      return {
+        message:        result.response,
+        transcription:  result.transcription,
+        conversationId: result.conversationId,
+        timestamp:      new Date(),
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('❌ handleVoice caught error:', msg);
+      return {
+        message:        `Sorry, voice processing hit an error: ${msg}`,
+        transcription:  '[Error]',
+        conversationId: body.conversationId ?? body.userId ?? 'voice-error',
+        timestamp:      new Date(),
+      };
+    }
   }
 }
