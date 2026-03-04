@@ -64,14 +64,29 @@ export class EmailOAuthService {
   }
 
   async handleCallback(
-    provider: EmailProviderName,
+    provider: EmailProviderName | undefined,
     code: string,
     state: string,
   ): Promise<EmailConnection> {
-    this.validateProvider(provider);
-    const payload = this.parseState(state, provider);
+    // Google (and Microsoft) only return `code` and `state` in the callback —
+    // they do NOT re-send the `provider` query param. Decode the state first
+    // to recover the provider that was embedded when the auth URL was built.
+    let resolvedProvider: EmailProviderName = provider as EmailProviderName;
+    if (!resolvedProvider && state) {
+      try {
+        const decoded = JSON.parse(
+          Buffer.from(state, 'base64url').toString('utf-8'),
+        ) as { userId: string; provider: EmailProviderName };
+        resolvedProvider = decoded.provider;
+      } catch {
+        // will fail at validateProvider below with a clear message
+      }
+    }
 
-    if (provider === 'gmail') {
+    this.validateProvider(resolvedProvider);
+    const payload = this.parseState(state, resolvedProvider);
+
+    if (resolvedProvider === 'gmail') {
       return this.exchangeGoogleCode(payload.userId, code);
     }
 

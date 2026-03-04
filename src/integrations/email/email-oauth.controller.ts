@@ -35,7 +35,7 @@ export class EmailOAuthController {
    */
   @Get('callback')
   async handleCallback(
-    @Query('provider') provider: EmailProviderName,
+    @Query('provider') provider: EmailProviderName | undefined,
     @Query('code') code: string,
     @Query('state') state: string,
     @Res() res: any,
