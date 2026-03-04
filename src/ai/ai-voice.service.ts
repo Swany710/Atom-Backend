@@ -55,8 +55,37 @@ export class AIVoiceService {
     - Updating their CRM with customer information
     - Answering general questions
 
-    You have access to various tools to help users. Use them when appropriate.
-    Be proactive, concise, and helpful. Today's date is ${today}.`.trim();
+    Today's date is ${today}.
+
+    ════════════════════════════════════════════════════════
+    CONFIRMATION RULE — THIS IS MANDATORY. NEVER SKIP IT.
+    ════════════════════════════════════════════════════════
+
+    Before calling ANY of these action tools you MUST get explicit user confirmation:
+      • send_email
+      • create_calendar_event
+      • update_crm
+
+    The required flow is:
+    1. Gather all needed information first (ask follow-up questions if anything is missing).
+    2. Present a clear confirmation summary in this exact format:
+
+       📋 Here's what I'm about to do:
+       [Action type, e.g. "Send Email / Create Event / Update CRM"]
+
+       [Key details — e.g. To:, Subject:, Body:, Date:, Time:, etc.]
+
+       ✅ Shall I go ahead? (Reply "yes", "send it", "confirm", "go ahead" — or "no" / "cancel" to stop)
+
+    3. WAIT for the user to reply with a clear "yes" or approval word.
+    4. ONLY after receiving explicit confirmation, call the tool.
+
+    If the user says "no", "cancel", "stop", or "change", do NOT call the tool.
+    Ask what they would like to change instead.
+
+    READ-ONLY tools (search_knowledge_base, check_calendar, get_general_info) do NOT
+    need confirmation — call them freely whenever helpful.
+    ════════════════════════════════════════════════════════`.trim();
   }
 
   /* ---------------------------------------------------------------------
@@ -106,7 +135,7 @@ export class AIVoiceService {
       },
       {
         name: 'create_calendar_event',
-        description: 'Create a new calendar event or meeting. Use this when the user wants to schedule something.',
+        description: 'Create a new calendar event or meeting. IMPORTANT: You MUST show the user a confirmation summary (Title, Date, Time, Attendees) and receive explicit approval ("yes", "create it", "confirm", "go ahead") BEFORE calling this tool. Never call this tool speculatively or without confirmed approval.',
         input_schema: {
           type: 'object' as const,
           properties: {
@@ -137,7 +166,7 @@ export class AIVoiceService {
       },
       {
         name: 'send_email',
-        description: 'Send an email on behalf of the user. Use this when the user wants to send or draft an email.',
+        description: 'Send an email on behalf of the user. IMPORTANT: You MUST show the user a confirmation summary (To, Subject, Body) and receive explicit approval ("yes", "send it", "confirm", "go ahead") BEFORE calling this tool. Never call this tool speculatively or without confirmed approval.',
         input_schema: {
           type: 'object' as const,
           properties: {
@@ -169,7 +198,7 @@ export class AIVoiceService {
       },
       {
         name: 'update_crm',
-        description: 'Update customer relationship management system with customer information, notes, or status updates.',
+        description: 'Update customer relationship management system with customer information, notes, or status updates. IMPORTANT: You MUST show the user a confirmation summary (Contact, Action, Data being updated) and receive explicit approval ("yes", "update it", "confirm", "go ahead") BEFORE calling this tool. Never call this tool speculatively or without confirmed approval.',
         input_schema: {
           type: 'object' as const,
           properties: {
