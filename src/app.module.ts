@@ -7,6 +7,8 @@ import { AppService } from './app.service';
 import { AIVoiceModule } from './ai/ai-voice.module';
 import { ChatMemory } from './ai/chat-memory.entity';
 import { EmailModule } from './integrations/email/email.module';
+import { CalendarModule } from './integrations/calendar/calendar.module';
+import { CrmModule } from './integrations/crm/crm.module';
 import { ApiKeyGuard } from './guards/api-key.guard';
 
 const isProd = process.env.NODE_ENV === 'production';
@@ -42,6 +44,8 @@ const isProd = process.env.NODE_ENV === 'production';
     TypeOrmModule.forFeature([ChatMemory]),
     AIVoiceModule,
     EmailModule,
+    CalendarModule,
+    CrmModule,
   ],
   controllers: [AppController],
   providers: [

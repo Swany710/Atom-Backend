@@ -8,6 +8,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ChatMemory } from './chat-memory.entity';
 import { CalendarService } from '../integrations/calendar/calendar.service';
+import { GoogleCalendarService } from '../integrations/calendar/google-calendar.service';
+import { AccuLynxService } from '../integrations/crm/acculynx.service';
 import * as path from 'path';
 import * as os from 'os';
 import { writeFile, unlink } from 'fs/promises';
@@ -32,6 +34,8 @@ export class AIVoiceService {
     @InjectRepository(ChatMemory)
     private readonly chatRepo: Repository<ChatMemory>,
     private readonly calendarService: CalendarService,
+    private readonly googleCalendar: GoogleCalendarService,
+    private readonly accuLynx: AccuLynxService,
     @Inject(EMAIL_PROVIDER)
     private readonly emailService: IEmailService,
   ) {
@@ -48,11 +52,11 @@ export class AIVoiceService {
    * ------------------------------------------------------------------- */
   private get systemPrompt(): string {
     const today = new Date().toLocaleDateString();
-    return `You are Atom, an AI personal assistant. You help users manage their work and personal life by:
+    return `You are Atom, an AI personal assistant for a roofing/contracting business. You help users manage their work by:
     - Searching their knowledge base for company/project information
-    - Managing their calendar (viewing and creating events)
-    - Handling emails (reading, drafting, sending)
-    - Updating their CRM with customer information
+    - Managing their Google Calendar (viewing and creating events)
+    - Handling emails (reading, drafting, sending via Gmail)
+    - Looking up and updating AccuLynx CRM jobs, contacts, and leads
     - Answering general questions
 
     Today's date is ${today}.
@@ -64,16 +68,17 @@ export class AIVoiceService {
     Before calling ANY of these action tools you MUST get explicit user confirmation:
       • send_email
       • create_calendar_event
-      • update_crm
+      • crm_add_note
+      • crm_create_lead
 
     The required flow is:
     1. Gather all needed information first (ask follow-up questions if anything is missing).
     2. Present a clear confirmation summary in this exact format:
 
        📋 Here's what I'm about to do:
-       [Action type, e.g. "Send Email / Create Event / Update CRM"]
+       [Action type, e.g. "Send Email / Create Event / Add CRM Note / Create Lead"]
 
-       [Key details — e.g. To:, Subject:, Body:, Date:, Time:, etc.]
+       [Key details — e.g. To:, Subject:, Body:, Date:, Time:, Job ID:, Note:, etc.]
 
        ✅ Shall I go ahead? (Reply "yes", "send it", "confirm", "go ahead" — or "no" / "cancel" to stop)
 
@@ -83,8 +88,8 @@ export class AIVoiceService {
     If the user says "no", "cancel", "stop", or "change", do NOT call the tool.
     Ask what they would like to change instead.
 
-    READ-ONLY tools (search_knowledge_base, check_calendar, get_general_info) do NOT
-    need confirmation — call them freely whenever helpful.
+    READ-ONLY tools (search_knowledge_base, check_calendar, get_crm_jobs, get_crm_job,
+    crm_get_contacts, get_general_info) do NOT need confirmation — call them freely.
     ════════════════════════════════════════════════════════`.trim();
   }
 
@@ -197,27 +202,75 @@ export class AIVoiceService {
         }
       },
       {
-        name: 'update_crm',
-        description: 'Update customer relationship management system with customer information, notes, or status updates. IMPORTANT: You MUST show the user a confirmation summary (Contact, Action, Data being updated) and receive explicit approval ("yes", "update it", "confirm", "go ahead") BEFORE calling this tool. Never call this tool speculatively or without confirmed approval.',
+        name: 'get_crm_jobs',
+        description: 'List jobs/projects from AccuLynx CRM. Use this to find jobs by status, search for a customer\'s job, or see recent jobs.',
         input_schema: {
           type: 'object' as const,
           properties: {
-            customer_id: {
-              type: 'string',
-              description: 'Customer ID or email'
-            },
-            action: {
-              type: 'string',
-              enum: ['update_notes', 'update_status', 'create_contact', 'log_interaction'],
-              description: 'Action to perform in CRM'
-            },
-            data: {
-              type: 'object',
-              description: 'Data to update (varies by action)'
-            }
+            search:   { type: 'string', description: 'Search by customer name, address, or job name' },
+            status:   { type: 'string', description: 'Filter by job status (e.g. "active", "completed")' },
+            page:     { type: 'number', description: 'Page number (default 1)' },
+            pageSize: { type: 'number', description: 'Results per page (default 25)' },
           },
-          required: ['action', 'data']
-        }
+          required: [],
+        },
+      },
+      {
+        name: 'get_crm_job',
+        description: 'Get full details for a single AccuLynx job by its job ID.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            jobId: { type: 'string', description: 'The AccuLynx job ID' },
+          },
+          required: ['jobId'],
+        },
+      },
+      {
+        name: 'crm_add_note',
+        description: 'Add a note/comment to an AccuLynx job. IMPORTANT: Show the user a confirmation (Job ID, Note text) and wait for explicit approval before calling.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            jobId:      { type: 'string', description: 'The AccuLynx job ID' },
+            note:       { type: 'string', description: 'The note text to add' },
+            authorName: { type: 'string', description: 'Author name (defaults to "Atom AI")' },
+          },
+          required: ['jobId', 'note'],
+        },
+      },
+      {
+        name: 'crm_get_contacts',
+        description: 'Search contacts in AccuLynx CRM.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            search:   { type: 'string', description: 'Search by name, email, or phone' },
+            page:     { type: 'number', description: 'Page number (default 1)' },
+            pageSize: { type: 'number', description: 'Results per page (default 25)' },
+          },
+          required: [],
+        },
+      },
+      {
+        name: 'crm_create_lead',
+        description: 'Create a new lead in AccuLynx CRM. IMPORTANT: Show the user a confirmation summary (Name, Email, Phone, Address) and wait for explicit approval before calling.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            firstName: { type: 'string', description: 'First name' },
+            lastName:  { type: 'string', description: 'Last name' },
+            email:     { type: 'string', description: 'Email address' },
+            phone:     { type: 'string', description: 'Phone number' },
+            address:   { type: 'string', description: 'Street address' },
+            city:      { type: 'string', description: 'City' },
+            state:     { type: 'string', description: 'State abbreviation' },
+            zip:       { type: 'string', description: 'ZIP code' },
+            notes:     { type: 'string', description: 'Additional notes' },
+            source:    { type: 'string', description: 'Lead source (defaults to "Atom AI")' },
+          },
+          required: ['firstName', 'lastName'],
+        },
       },
       {
         name: 'get_general_info',
@@ -376,8 +429,20 @@ export class AIVoiceService {
       case 'send_email':
         return this.sendEmail(args, sessionId);
 
-      case 'update_crm':
-        return this.updateCRM(args.customer_id, args.action, args.data, sessionId);
+      case 'get_crm_jobs':
+        return this.accuLynx.getJobs({ search: args.search, status: args.status, page: args.page, pageSize: args.pageSize });
+
+      case 'get_crm_job':
+        return this.accuLynx.getJob(args.jobId);
+
+      case 'crm_add_note':
+        return this.accuLynx.addNote(args.jobId, args.note, args.authorName);
+
+      case 'crm_get_contacts':
+        return this.accuLynx.getContacts({ search: args.search, page: args.page, pageSize: args.pageSize });
+
+      case 'crm_create_lead':
+        return this.accuLynx.createLead(args);
 
       case 'get_general_info':
         return this.getGeneralInfo(args.query);
@@ -413,11 +478,40 @@ export class AIVoiceService {
     sessionId?: string,
   ): Promise<any> {
     this.logger.log(`Checking calendar: ${startDate} to ${endDate}`);
+    // Try Google Calendar first (OAuth-based), fall back to Microsoft Graph
+    try {
+      const userId = sessionId ?? 'default-user';
+      const status = await this.googleCalendar.getConnectionStatus(userId);
+      if (status.connected) {
+        const days = endDate
+          ? Math.ceil((new Date(endDate).getTime() - new Date(startDate).getTime()) / 86_400_000)
+          : 1;
+        return this.googleCalendar.getUpcomingEvents(userId, Math.max(days, 1));
+      }
+    } catch {}
+    // Fall back to Microsoft
     return this.calendarService.checkCalendar(startDate, endDate, searchQuery, sessionId);
   }
 
   private async createCalendarEvent(args: any, sessionId?: string): Promise<any> {
     this.logger.log(`Creating calendar event: ${args.title}`);
+    // Try Google Calendar first
+    try {
+      const userId = sessionId ?? 'default-user';
+      const status = await this.googleCalendar.getConnectionStatus(userId);
+      if (status.connected) {
+        return this.googleCalendar.createEvent(
+          userId,
+          args.title,
+          args.start_time,
+          args.end_time,
+          args.description,
+          args.location,
+          args.attendees,
+        );
+      }
+    } catch {}
+    // Fall back to Microsoft
     return this.calendarService.createCalendarEvent(
       args.title,
       args.start_time,
@@ -441,23 +535,6 @@ export class AIVoiceService {
       args.html,
       sessionId,
     );
-  }
-
-  private async updateCRM(
-    customerId: string,
-    action: string,
-    data: any,
-    sessionId?: string,
-  ): Promise<any> {
-    this.logger.log(`[STUB] Updating CRM: ${action} for ${customerId}`);
-    // TODO: Implement Salesforce / HubSpot / custom CRM integration
-    return {
-      success: false,
-      message: 'CRM integration not yet implemented. This is a placeholder response.',
-      customerId,
-      action,
-      data,
-    };
   }
 
   private async getGeneralInfo(query: string): Promise<any> {

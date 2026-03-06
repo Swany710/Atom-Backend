@@ -6,12 +6,14 @@ import { AIVoiceController } from './ai-voice.controller';
 import { ChatMemory } from './chat-memory.entity';
 import { CalendarModule } from '../integrations/calendar/calendar.module';
 import { EmailModule } from '../integrations/email/email.module';
+import { CrmModule } from '../integrations/crm/crm.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([ChatMemory]),
     CalendarModule,
     EmailModule,
+    CrmModule,
   ],
   providers: [AIVoiceService],
   controllers: [AIVoiceController],
