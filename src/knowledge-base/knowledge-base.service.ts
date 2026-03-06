@@ -89,11 +89,11 @@ export class KnowledgeBaseService {
         try {
           const vecStr = `[${queryVec.join(',')}]`;
           const rows: any[] = await this.dataSource.query(
-            `SELECT id, title, content, source, category, file_name as "fileName",
-                    created_at as "createdAt",
+            `SELECT id, title, content, source, category,
+                    "fileName", "createdAt",
                     1 - (embedding::vector <=> $1::vector) AS similarity
              FROM knowledge_base_entries
-             WHERE is_active = true
+             WHERE "isActive" = true
                AND embedding IS NOT NULL
              ORDER BY embedding::vector <=> $1::vector
              LIMIT $2`,
