@@ -9,6 +9,7 @@ import { ChatMemory } from './ai/chat-memory.entity';
 import { EmailModule } from './integrations/email/email.module';
 import { CalendarModule } from './integrations/calendar/calendar.module';
 import { CrmModule } from './integrations/crm/crm.module';
+import { KnowledgeBaseModule } from './knowledge-base/knowledge-base.module';
 import { ApiKeyGuard } from './guards/api-key.guard';
 
 const isProd = process.env.NODE_ENV === 'production';
@@ -46,6 +47,7 @@ const isProd = process.env.NODE_ENV === 'production';
     EmailModule,
     CalendarModule,
     CrmModule,
+    KnowledgeBaseModule,
   ],
   controllers: [AppController],
   providers: [

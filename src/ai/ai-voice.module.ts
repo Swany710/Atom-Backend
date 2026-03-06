@@ -7,6 +7,7 @@ import { ChatMemory } from './chat-memory.entity';
 import { CalendarModule } from '../integrations/calendar/calendar.module';
 import { EmailModule } from '../integrations/email/email.module';
 import { CrmModule } from '../integrations/crm/crm.module';
+import { KnowledgeBaseModule } from '../knowledge-base/knowledge-base.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { CrmModule } from '../integrations/crm/crm.module';
     CalendarModule,
     EmailModule,
     CrmModule,
+    KnowledgeBaseModule,
   ],
   providers: [AIVoiceService],
   controllers: [AIVoiceController],

@@ -10,6 +10,7 @@ import { ChatMemory } from './chat-memory.entity';
 import { CalendarService } from '../integrations/calendar/calendar.service';
 import { GoogleCalendarService } from '../integrations/calendar/google-calendar.service';
 import { AccuLynxService } from '../integrations/crm/acculynx.service';
+import { KnowledgeBaseService } from '../knowledge-base/knowledge-base.service';
 import * as path from 'path';
 import * as os from 'os';
 import { writeFile, unlink } from 'fs/promises';
@@ -36,6 +37,7 @@ export class AIVoiceService {
     private readonly calendarService: CalendarService,
     private readonly googleCalendar: GoogleCalendarService,
     private readonly accuLynx: AccuLynxService,
+    private readonly knowledgeBase: KnowledgeBaseService,
     @Inject(EMAIL_PROVIDER)
     private readonly emailService: IEmailService,
   ) {
@@ -454,21 +456,40 @@ export class AIVoiceService {
   }
 
   /* ---------------------------------------------------------------------
-   *  Tool Implementations (Stubs - to be implemented)
+   *  Tool Implementations
    * ------------------------------------------------------------------- */
   private async searchKnowledgeBase(
     query: string,
     filter?: string,
     sessionId?: string,
   ): Promise<any> {
-    this.logger.log(`[STUB] Searching knowledge base: ${query}`);
-    // TODO: Implement RAG integration (Pinecone, Weaviate, ChromaDB, etc.)
-    return {
-      results: [],
-      message: 'Knowledge base integration not yet implemented. This is a placeholder response.',
-      query,
-      filter,
-    };
+    this.logger.log(`Searching knowledge base: "${query}" filter=${filter}`);
+    try {
+      const results = await this.knowledgeBase.search(query, 5);
+      if (!results.length) {
+        return {
+          results: [],
+          message: 'No matching knowledge base entries found. Try a broader search.',
+          query,
+        };
+      }
+      return {
+        results: results.map(r => ({
+          id:       r.id,
+          title:    r.title,
+          // Truncate content for the AI context window — full text in frontend
+          excerpt:  r.content.slice(0, 600) + (r.content.length > 600 ? '…' : ''),
+          source:   r.source,
+          category: r.category,
+          similarity: r.similarity,
+        })),
+        message: `Found ${results.length} relevant knowledge base entry(s).`,
+        query,
+      };
+    } catch (err: any) {
+      this.logger.error('searchKnowledgeBase error:', err.message);
+      return { results: [], error: err.message, query };
+    }
   }
 
   private async checkCalendar(
