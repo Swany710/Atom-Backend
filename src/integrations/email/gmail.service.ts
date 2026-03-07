@@ -258,6 +258,133 @@ export class GmailService {
     return { messageId: res.data?.id, threadId: res.data?.threadId };
   }
 
+
+  /** Get a single email with full body text */
+  async getEmail(messageId: string, userId = 'default-user') {
+    const { client } = await this.resolveAuth(userId);
+    const gmail = this.gmailClient(client);
+    const msg = await gmail.users.messages.get({
+      userId: 'me',
+      id: messageId,
+      format: 'full',
+    });
+
+    const headers = msg.data?.payload?.headers ?? [];
+    const getH = (n: string) => headers.find(h => h.name?.toLowerCase() === n.toLowerCase())?.value;
+
+    const extractBody = (payload: any): string => {
+      if (!payload) return '';
+      if (payload.body?.data) return Buffer.from(payload.body.data, 'base64url').toString('utf-8');
+      if (payload.parts) {
+        const textPart = payload.parts.find((p: any) => p.mimeType === 'text/plain');
+        const htmlPart = payload.parts.find((p: any) => p.mimeType === 'text/html');
+        const part = textPart ?? htmlPart;
+        if (part?.body?.data) return Buffer.from(part.body.data, 'base64url').toString('utf-8');
+        for (const p of payload.parts) {
+          const nested = extractBody(p);
+          if (nested) return nested;
+        }
+      }
+      return '';
+    };
+
+    return {
+      id:        msg.data?.id,
+      threadId:  msg.data?.threadId,
+      from:      getH('From'),
+      to:        getH('To'),
+      cc:        getH('Cc'),
+      subject:   getH('Subject'),
+      date:      getH('Date'),
+      snippet:   msg.data?.snippet,
+      body:      extractBody(msg.data?.payload),
+      labelIds:  msg.data?.labelIds ?? [],
+      unread:    (msg.data?.labelIds ?? []).includes('UNREAD'),
+    };
+  }
+
+  /** Get a full email thread */
+  async getThread(threadId: string, userId = 'default-user') {
+    const { client } = await this.resolveAuth(userId);
+    const gmail = this.gmailClient(client);
+    const thread = await gmail.users.threads.get({
+      userId: 'me',
+      id: threadId,
+      format: 'metadata',
+      metadataHeaders: ['From', 'To', 'Subject', 'Date'],
+    });
+    const messages = (thread.data?.messages ?? []).map(m => {
+      const headers = m.payload?.headers ?? [];
+      const getH = (n: string) => headers.find(h => h.name?.toLowerCase() === n.toLowerCase())?.value;
+      return {
+        id:       m.id,
+        from:     getH('From'),
+        to:       getH('To'),
+        date:     getH('Date'),
+        snippet:  m.snippet,
+        unread:   (m.labelIds ?? []).includes('UNREAD'),
+      };
+    });
+    return { threadId, subject: messages[0] ? undefined : '', messages };
+  }
+
+  /** Search emails with a Gmail query string */
+  async searchEmails(query: string, maxResults = 20, userId = 'default-user') {
+    return this.readEmails(maxResults, query, false, userId);
+  }
+
+  /** Move a message to trash */
+  async deleteEmail(messageId: string, userId = 'default-user') {
+    const { client } = await this.resolveAuth(userId);
+    const gmail = this.gmailClient(client);
+    await gmail.users.messages.trash({ userId: 'me', id: messageId });
+    return { success: true, messageId, action: 'trashed' };
+  }
+
+  /** Archive (remove INBOX label, keep in All Mail) */
+  async archiveEmail(messageId: string, userId = 'default-user') {
+    const { client } = await this.resolveAuth(userId);
+    const gmail = this.gmailClient(client);
+    await gmail.users.messages.modify({
+      userId: 'me',
+      id: messageId,
+      requestBody: { removeLabelIds: ['INBOX'] },
+    });
+    return { success: true, messageId, action: 'archived' };
+  }
+
+  /** Mark a message as read or unread */
+  async markRead(messageId: string, read: boolean, userId = 'default-user') {
+    const { client } = await this.resolveAuth(userId);
+    const gmail = this.gmailClient(client);
+    const body = read
+      ? { removeLabelIds: ['UNREAD'] }
+      : { addLabelIds: ['UNREAD'] };
+    await gmail.users.messages.modify({ userId: 'me', id: messageId, requestBody: body });
+    return { success: true, messageId, read };
+  }
+
+  /** Move message to a label/folder */
+  async moveEmail(messageId: string, addLabelIds: string[], removeLabelIds: string[], userId = 'default-user') {
+    const { client } = await this.resolveAuth(userId);
+    const gmail = this.gmailClient(client);
+    await gmail.users.messages.modify({
+      userId: 'me',
+      id: messageId,
+      requestBody: { addLabelIds, removeLabelIds },
+    });
+    return { success: true, messageId };
+  }
+
+  /** List available Gmail labels/folders */
+  async listLabels(userId = 'default-user') {
+    const { client } = await this.resolveAuth(userId);
+    const gmail = this.gmailClient(client);
+    const res = await gmail.users.labels.list({ userId: 'me' });
+    return (res.data.labels ?? []).map(l => ({ id: l.id, name: l.name, type: l.type }));
+  }
+
+
   // ── Status helper used by settings endpoint ───────────────────────────────
   async getConnectionStatus(userId = 'default-user'): Promise<{
     connected: boolean;

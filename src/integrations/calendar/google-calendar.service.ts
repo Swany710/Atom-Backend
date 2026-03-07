@@ -178,16 +178,132 @@ export class GoogleCalendarService {
     }
   }
 
+
+  // ── Update an event ────────────────────────────────────────────────────
+  async updateEvent(
+    userId    = 'default-user',
+    eventId:    string,
+    updates: {
+      title?:       string;
+      startTime?:   string;
+      endTime?:     string;
+      description?: string;
+      location?:    string;
+      attendees?:   string[];
+    },
+  ): Promise<CalendarResult> {
+    try {
+      const auth     = await this.buildClient(userId);
+      const calendar = google.calendar({ version: 'v3', auth });
+
+      // Fetch current event first
+      const existing = await calendar.events.get({ calendarId: 'primary', eventId });
+      const ev: any  = existing.data;
+
+      const patched: any = {
+        summary:     updates.title       ?? ev.summary,
+        description: updates.description ?? ev.description,
+        location:    updates.location    ?? ev.location,
+        start: updates.startTime
+          ? { dateTime: new Date(updates.startTime).toISOString(), timeZone: 'America/Chicago' }
+          : ev.start,
+        end: updates.endTime
+          ? { dateTime: new Date(updates.endTime).toISOString(), timeZone: 'America/Chicago' }
+          : ev.end,
+      };
+
+      if (updates.attendees) {
+        patched.attendees = updates.attendees.map(email => ({ email }));
+      }
+
+      const res = await calendar.events.patch({
+        calendarId: 'primary',
+        eventId,
+        requestBody: patched,
+        sendNotifications: true,
+      });
+
+      return { success: true, event: this.formatEvent(res.data), message: 'Event updated.' };
+    } catch (err: any) {
+      this.logger.error('updateEvent error:', err.message);
+      return { success: false, error: err.message };
+    }
+  }
+
+  // ── Delete an event ────────────────────────────────────────────────────
+  async deleteEvent(userId = 'default-user', eventId: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      const auth     = await this.buildClient(userId);
+      const calendar = google.calendar({ version: 'v3', auth });
+      await calendar.events.delete({ calendarId: 'primary', eventId, sendNotifications: true });
+      return { success: true };
+    } catch (err: any) {
+      this.logger.error('deleteEvent error:', err.message);
+      return { success: false, error: err.message };
+    }
+  }
+
+  // ── Search events by keyword ───────────────────────────────────────────
+  async searchEvents(userId = 'default-user', query: string, maxResults = 20): Promise<CalendarResult> {
+    try {
+      const auth     = await this.buildClient(userId);
+      const calendar = google.calendar({ version: 'v3', auth });
+      const now      = new Date();
+
+      const res = await calendar.events.list({
+        calendarId:   'primary',
+        q:            query,
+        timeMin:       new Date(now.getTime() - 30 * 86_400_000).toISOString(), // past 30 days
+        timeMax:       new Date(now.getTime() + 90 * 86_400_000).toISOString(), // next 90 days
+        singleEvents: true,
+        orderBy:      'startTime',
+        maxResults,
+      });
+
+      const events = (res.data.items ?? []).map(e => this.formatEvent(e));
+      return { success: true, events, message: `${events.length} event(s) matching "${query}"` };
+    } catch (err: any) {
+      this.logger.error('searchEvents error:', err.message);
+      return { success: false, error: err.message };
+    }
+  }
+
+  // ── Get a single event by ID ───────────────────────────────────────────
+  async getEvent(userId = 'default-user', eventId: string): Promise<CalendarResult> {
+    try {
+      const auth     = await this.buildClient(userId);
+      const calendar = google.calendar({ version: 'v3', auth });
+      const res      = await calendar.events.get({ calendarId: 'primary', eventId });
+      return { success: true, event: this.formatEvent(res.data), message: 'Event found.' };
+    } catch (err: any) {
+      this.logger.error('getEvent error:', err.message);
+      return { success: false, error: err.message };
+    }
+  }
+
+
   // ── Check connection status ────────────────────────────────────────────
   async getConnectionStatus(userId = 'default-user') {
     const conn = await this.connectionRepo.findOne({ where: { userId, provider: 'gmail' } });
-    const hasCalendarScope = conn?.scope?.includes('calendar') ?? false;
-    return {
-      connected:    !!conn?.refreshToken && hasCalendarScope,
-      emailAddress: conn?.emailAddress,
-      note: conn && !hasCalendarScope
-        ? 'Re-connect Gmail in Settings to grant Calendar access.'
-        : undefined,
-    };
+    if (!conn?.refreshToken) {
+      return { connected: false, emailAddress: undefined, note: 'Connect Gmail in Settings to enable Calendar.' };
+    }
+    // Attempt a lightweight API call to verify the token actually works and has calendar access.
+    try {
+      const auth     = await this.buildClient(userId);
+      const calendar = google.calendar({ version: 'v3', auth });
+      await calendar.calendarList.list({ maxResults: 1 });
+      return { connected: true, emailAddress: conn.emailAddress };
+    } catch (err: any) {
+      const needsReconnect = err.message?.includes('insufficient') || err.message?.includes('scope') || err.message?.includes('403');
+      return {
+        connected: false,
+        emailAddress: conn.emailAddress,
+        note: needsReconnect
+          ? 'Re-connect Gmail in Settings to grant Calendar access (missing scope).'
+          : 'Calendar check failed — try reconnecting Gmail.',
+        error: err.message,
+      };
+    }
   }
 }

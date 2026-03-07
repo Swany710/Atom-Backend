@@ -7,6 +7,7 @@ import { EMAIL_PROVIDER, IEmailService } from '../integrations/email/email.provi
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ChatMemory } from './chat-memory.entity';
+import { GmailService } from '../integrations/email/gmail.service';
 import { CalendarService } from '../integrations/calendar/calendar.service';
 import { GoogleCalendarService } from '../integrations/calendar/google-calendar.service';
 import { AccuLynxService } from '../integrations/crm/acculynx.service';
@@ -34,6 +35,7 @@ export class AIVoiceService {
     private readonly config: ConfigService,
     @InjectRepository(ChatMemory)
     private readonly chatRepo: Repository<ChatMemory>,
+    private readonly gmailService: GmailService,
     private readonly calendarService: CalendarService,
     private readonly googleCalendar: GoogleCalendarService,
     private readonly accuLynx: AccuLynxService,
@@ -53,46 +55,47 @@ export class AIVoiceService {
    *  Chat helpers
    * ------------------------------------------------------------------- */
   private get systemPrompt(): string {
-    const today = new Date().toLocaleDateString();
-    return `You are Atom, an AI personal assistant for a roofing/contracting business. You help users manage their work by:
-    - Searching their knowledge base for company/project information
-    - Managing their Google Calendar (viewing and creating events)
-    - Handling emails (reading, drafting, sending via Gmail)
-    - Looking up and updating AccuLynx CRM jobs, contacts, and leads
-    - Answering general questions
+    const today = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    return `You are Atom, an AI personal assistant for a roofing and contracting business. You are proactive, organized, and operate like a world-class executive assistant. Today is ${today}.
 
-    Today's date is ${today}.
+You have full access to the user's:
+  • Gmail — read, search, summarize, reply, send, draft, delete, archive, mark read/unread
+  • Google Calendar — view, search, create, edit, delete events
+  • AccuLynx CRM — view jobs, contacts, leads; add notes; create leads
+  • Company Knowledge Base — search for SOPs, company info, product details, FAQs
+  • General reasoning — summarize, prioritize, plan, answer questions
 
-    ════════════════════════════════════════════════════════
-    CONFIRMATION RULE — THIS IS MANDATORY. NEVER SKIP IT.
-    ════════════════════════════════════════════════════════
+════════════════════════════════════════════
+HOW TO BEHAVE AS A PERSONAL ASSISTANT
+════════════════════════════════════════════
+• Be proactive and thorough. When asked to "check my email", pull 10–20 emails and give a smart summary: who needs a reply, any urgent items, any patterns.
+• When asked to "prioritize my day", check BOTH calendar and email, then give a clear, ordered action plan.
+• When summarizing, always include: sender, subject, key ask, and urgency level.
+• When searching email, use smart Gmail query syntax (from:, subject:, is:unread, after:, etc.).
+• For calendar, always confirm timezone and show full event details.
+• Chain tools together. e.g. "What's on my plate?" → check calendar + read emails + summarize everything.
+• If the user says something vague, interpret it helpfully and do the most useful thing.
 
-    Before calling ANY of these action tools you MUST get explicit user confirmation:
-      • send_email
-      • create_calendar_event
-      • crm_add_note
-      • crm_create_lead
+════════════════════════════════════════════
+CONFIRMATION RULE — MANDATORY FOR WRITE ACTIONS
+════════════════════════════════════════════
+Always confirm BEFORE calling these tools:
+  • send_email / reply_email
+  • create_calendar_event / update_calendar_event / delete_calendar_event
+  • delete_email / archive_email
+  • crm_add_note / crm_create_lead
 
-    The required flow is:
-    1. Gather all needed information first (ask follow-up questions if anything is missing).
-    2. Present a clear confirmation summary in this exact format:
+Confirmation format:
+  📋 Here's what I'm about to do:
+  [Action — e.g. "Send Email", "Delete Event", "Archive Message"]
+  [Key details]
+  ✅ Confirm? (say "yes", "go ahead", "send it" — or "no" to cancel)
 
-       📋 Here's what I'm about to do:
-       [Action type, e.g. "Send Email / Create Event / Add CRM Note / Create Lead"]
-
-       [Key details — e.g. To:, Subject:, Body:, Date:, Time:, Job ID:, Note:, etc.]
-
-       ✅ Shall I go ahead? (Reply "yes", "send it", "confirm", "go ahead" — or "no" / "cancel" to stop)
-
-    3. WAIT for the user to reply with a clear "yes" or approval word.
-    4. ONLY after receiving explicit confirmation, call the tool.
-
-    If the user says "no", "cancel", "stop", or "change", do NOT call the tool.
-    Ask what they would like to change instead.
-
-    READ-ONLY tools (search_knowledge_base, check_calendar, get_crm_jobs, get_crm_job,
-    crm_get_contacts, get_general_info) do NOT need confirmation — call them freely.
-    ════════════════════════════════════════════════════════`.trim();
+READ-ONLY tools need NO confirmation — call them immediately:
+  search_knowledge_base, read_emails, search_emails, get_email, get_thread,
+  check_calendar, search_calendar, get_crm_jobs, get_crm_job, crm_get_contacts,
+  list_email_labels, get_general_info
+════════════════════════════════════════════`.trim();
   }
 
   /* ---------------------------------------------------------------------
@@ -100,143 +103,218 @@ export class AIVoiceService {
    * ------------------------------------------------------------------- */
   private getToolDefinitions(): Anthropic.Messages.Tool[] {
     return [
+      // ── Knowledge Base ──────────────────────────────────────────────
       {
         name: 'search_knowledge_base',
-        description: 'Search the user\'s knowledge base for company documents, project information, notes, or any stored information. Use this when the user asks about specific projects, documents, or company information.',
+        description: 'Search company knowledge base for SOPs, product info, FAQs, documents, and notes.',
+        input_schema: { type: 'object' as const, properties: { query: { type: 'string' }, filter: { type: 'string' } }, required: ['query'] },
+      },
+      // ── Email — READ ────────────────────────────────────────────────
+      {
+        name: 'read_emails',
+        description: 'List recent emails from Gmail inbox. Use to get a summary of messages, check for unread mail, or browse recent conversations.',
         input_schema: {
           type: 'object' as const,
           properties: {
-            query: {
-              type: 'string',
-              description: 'The search query to find relevant information'
-            },
-            filter: {
-              type: 'string',
-              description: 'Optional filter (e.g., "project_name", "document_type")',
-            }
+            maxResults:  { type: 'number',  description: 'Number of emails to fetch (default 20)' },
+            query:       { type: 'string',  description: 'Gmail search query (e.g. "is:unread", "from:boss@co.com")' },
+            unreadOnly:  { type: 'boolean', description: 'Only fetch unread emails' },
           },
-          required: ['query']
-        }
+          required: [],
+        },
       },
       {
-        name: 'check_calendar',
-        description: 'Check the user\'s calendar for events, meetings, or availability. Use this when the user asks about their schedule, meetings, or when they\'re free.',
+        name: 'search_emails',
+        description: 'Search Gmail using a query string. Supports Gmail operators: from:, to:, subject:, is:unread, has:attachment, after:2024/1/1, etc.',
         input_schema: {
           type: 'object' as const,
           properties: {
-            start_date: {
-              type: 'string',
-              description: 'Start date in ISO format (e.g., "2024-01-15")'
-            },
-            end_date: {
-              type: 'string',
-              description: 'End date in ISO format (e.g., "2024-01-20")'
-            },
-            search_query: {
-              type: 'string',
-              description: 'Optional search term to filter events'
-            }
+            query:      { type: 'string', description: 'Gmail search query' },
+            maxResults: { type: 'number', description: 'Max results (default 20)' },
           },
-          required: ['start_date']
-        }
+          required: ['query'],
+        },
       },
       {
-        name: 'create_calendar_event',
-        description: 'Create a new calendar event or meeting. IMPORTANT: You MUST show the user a confirmation summary (Title, Date, Time, Attendees) and receive explicit approval ("yes", "create it", "confirm", "go ahead") BEFORE calling this tool. Never call this tool speculatively or without confirmed approval.',
+        name: 'get_email',
+        description: 'Get the full body and details of a specific email by its message ID.',
         input_schema: {
           type: 'object' as const,
-          properties: {
-            title: {
-              type: 'string',
-              description: 'Event title'
-            },
-            start_time: {
-              type: 'string',
-              description: 'Start time in ISO format (e.g., "2024-01-15T14:00:00")'
-            },
-            end_time: {
-              type: 'string',
-              description: 'End time in ISO format'
-            },
-            description: {
-              type: 'string',
-              description: 'Event description or notes'
-            },
-            attendees: {
-              type: 'array',
-              items: { type: 'string' },
-              description: 'List of attendee email addresses'
-            }
-          },
-          required: ['title', 'start_time', 'end_time']
-        }
+          properties: { messageId: { type: 'string', description: 'Gmail message ID' } },
+          required: ['messageId'],
+        },
       },
+      {
+        name: 'get_thread',
+        description: 'Get all messages in an email thread/conversation.',
+        input_schema: {
+          type: 'object' as const,
+          properties: { threadId: { type: 'string', description: 'Gmail thread ID' } },
+          required: ['threadId'],
+        },
+      },
+      {
+        name: 'list_email_labels',
+        description: 'List available Gmail labels/folders.',
+        input_schema: { type: 'object' as const, properties: {}, required: [] },
+      },
+      // ── Email — WRITE (require confirmation) ───────────────────────
       {
         name: 'send_email',
-        description: 'Send an email on behalf of the user. IMPORTANT: You MUST show the user a confirmation summary (To, Subject, Body) and receive explicit approval ("yes", "send it", "confirm", "go ahead") BEFORE calling this tool. Never call this tool speculatively or without confirmed approval.',
+        description: 'Send an email. REQUIRE confirmation before calling.',
         input_schema: {
           type: 'object' as const,
           properties: {
-            to: {
-              type: 'array',
-              items: { type: 'string' },
-              description: 'Recipient email addresses'
-            },
-            subject: {
-              type: 'string',
-              description: 'Email subject line'
-            },
-            body: {
-              type: 'string',
-              description: 'Email body content'
-            },
-            provider: {
-              type: 'string',
-              enum: ['gmail', 'outlook'],
-              description: 'Email provider to use for sending'
-            },
-            draft_only: {
-              type: 'boolean',
-              description: 'If true, create a draft instead of sending'
-            }
+            to:        { type: 'array', items: { type: 'string' }, description: 'Recipient email addresses' },
+            subject:   { type: 'string', description: 'Subject line' },
+            body:      { type: 'string', description: 'Email body (plain text)' },
+            cc:        { type: 'array', items: { type: 'string' } },
+            draftOnly: { type: 'boolean', description: 'Save as draft only, do not send' },
           },
-          required: ['to', 'subject', 'body']
-        }
+          required: ['to', 'subject', 'body'],
+        },
       },
       {
-        name: 'get_crm_jobs',
-        description: 'List jobs/projects from AccuLynx CRM. Use this to find jobs by status, search for a customer\'s job, or see recent jobs.',
+        name: 'reply_email',
+        description: 'Reply to an existing email. REQUIRE confirmation before calling.',
         input_schema: {
           type: 'object' as const,
           properties: {
-            search:   { type: 'string', description: 'Search by customer name, address, or job name' },
-            status:   { type: 'string', description: 'Filter by job status (e.g. "active", "completed")' },
-            page:     { type: 'number', description: 'Page number (default 1)' },
-            pageSize: { type: 'number', description: 'Results per page (default 25)' },
+            messageId: { type: 'string', description: 'Gmail message ID to reply to' },
+            body:      { type: 'string', description: 'Reply body text' },
+            replyAll:  { type: 'boolean', description: 'Reply-all (default false)' },
+          },
+          required: ['messageId', 'body'],
+        },
+      },
+      {
+        name: 'delete_email',
+        description: 'Move an email to trash. REQUIRE confirmation before calling.',
+        input_schema: {
+          type: 'object' as const,
+          properties: { messageId: { type: 'string' } },
+          required: ['messageId'],
+        },
+      },
+      {
+        name: 'archive_email',
+        description: 'Archive an email (removes from inbox, keeps in All Mail). REQUIRE confirmation before calling.',
+        input_schema: {
+          type: 'object' as const,
+          properties: { messageId: { type: 'string' } },
+          required: ['messageId'],
+        },
+      },
+      {
+        name: 'mark_email_read',
+        description: 'Mark an email as read or unread.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            messageId: { type: 'string' },
+            read:      { type: 'boolean', description: 'true = mark read, false = mark unread' },
+          },
+          required: ['messageId', 'read'],
+        },
+      },
+      // ── Calendar — READ ─────────────────────────────────────────────
+      {
+        name: 'check_calendar',
+        description: 'View calendar events for today, upcoming days, or a date range.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            start_date:   { type: 'string', description: 'Start date (ISO, e.g. "2024-01-15")' },
+            end_date:     { type: 'string', description: 'End date (ISO)' },
+            search_query: { type: 'string', description: 'Optional keyword to filter events' },
+          },
+          required: ['start_date'],
+        },
+      },
+      {
+        name: 'search_calendar',
+        description: 'Search calendar events by keyword (title, location, attendee, description).',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            query:      { type: 'string', description: 'Search term' },
+            maxResults: { type: 'number' },
+          },
+          required: ['query'],
+        },
+      },
+      // ── Calendar — WRITE (require confirmation) ────────────────────
+      {
+        name: 'create_calendar_event',
+        description: 'Create a calendar event. REQUIRE confirmation before calling.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            title:       { type: 'string' },
+            start_time:  { type: 'string', description: 'ISO datetime' },
+            end_time:    { type: 'string', description: 'ISO datetime' },
+            description: { type: 'string' },
+            location:    { type: 'string' },
+            attendees:   { type: 'array', items: { type: 'string' } },
+          },
+          required: ['title', 'start_time', 'end_time'],
+        },
+      },
+      {
+        name: 'update_calendar_event',
+        description: 'Edit an existing calendar event. REQUIRE confirmation before calling.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            eventId:     { type: 'string', description: 'Google Calendar event ID' },
+            title:       { type: 'string' },
+            start_time:  { type: 'string' },
+            end_time:    { type: 'string' },
+            description: { type: 'string' },
+            location:    { type: 'string' },
+            attendees:   { type: 'array', items: { type: 'string' } },
+          },
+          required: ['eventId'],
+        },
+      },
+      {
+        name: 'delete_calendar_event',
+        description: 'Delete a calendar event permanently. REQUIRE confirmation before calling.',
+        input_schema: {
+          type: 'object' as const,
+          properties: { eventId: { type: 'string', description: 'Google Calendar event ID' } },
+          required: ['eventId'],
+        },
+      },
+      // ── CRM ─────────────────────────────────────────────────────────
+      {
+        name: 'get_crm_jobs',
+        description: 'List AccuLynx CRM jobs. Filter by status or search by name/address.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            search:   { type: 'string' },
+            status:   { type: 'string' },
+            page:     { type: 'number' },
+            pageSize: { type: 'number' },
           },
           required: [],
         },
       },
       {
         name: 'get_crm_job',
-        description: 'Get full details for a single AccuLynx job by its job ID.',
-        input_schema: {
-          type: 'object' as const,
-          properties: {
-            jobId: { type: 'string', description: 'The AccuLynx job ID' },
-          },
-          required: ['jobId'],
-        },
+        description: 'Get full details for a single AccuLynx job by ID.',
+        input_schema: { type: 'object' as const, properties: { jobId: { type: 'string' } }, required: ['jobId'] },
       },
       {
         name: 'crm_add_note',
-        description: 'Add a note/comment to an AccuLynx job. IMPORTANT: Show the user a confirmation (Job ID, Note text) and wait for explicit approval before calling.',
+        description: 'Add a note to an AccuLynx job. REQUIRE confirmation before calling.',
         input_schema: {
           type: 'object' as const,
           properties: {
-            jobId:      { type: 'string', description: 'The AccuLynx job ID' },
-            note:       { type: 'string', description: 'The note text to add' },
-            authorName: { type: 'string', description: 'Author name (defaults to "Atom AI")' },
+            jobId:      { type: 'string' },
+            note:       { type: 'string' },
+            authorName: { type: 'string' },
           },
           required: ['jobId', 'note'],
         },
@@ -246,48 +324,31 @@ export class AIVoiceService {
         description: 'Search contacts in AccuLynx CRM.',
         input_schema: {
           type: 'object' as const,
-          properties: {
-            search:   { type: 'string', description: 'Search by name, email, or phone' },
-            page:     { type: 'number', description: 'Page number (default 1)' },
-            pageSize: { type: 'number', description: 'Results per page (default 25)' },
-          },
+          properties: { search: { type: 'string' }, page: { type: 'number' }, pageSize: { type: 'number' } },
           required: [],
         },
       },
       {
         name: 'crm_create_lead',
-        description: 'Create a new lead in AccuLynx CRM. IMPORTANT: Show the user a confirmation summary (Name, Email, Phone, Address) and wait for explicit approval before calling.',
+        description: 'Create a new lead in AccuLynx. REQUIRE confirmation before calling.',
         input_schema: {
           type: 'object' as const,
           properties: {
-            firstName: { type: 'string', description: 'First name' },
-            lastName:  { type: 'string', description: 'Last name' },
-            email:     { type: 'string', description: 'Email address' },
-            phone:     { type: 'string', description: 'Phone number' },
-            address:   { type: 'string', description: 'Street address' },
-            city:      { type: 'string', description: 'City' },
-            state:     { type: 'string', description: 'State abbreviation' },
-            zip:       { type: 'string', description: 'ZIP code' },
-            notes:     { type: 'string', description: 'Additional notes' },
-            source:    { type: 'string', description: 'Lead source (defaults to "Atom AI")' },
+            firstName: { type: 'string' }, lastName: { type: 'string' },
+            email: { type: 'string' },     phone:  { type: 'string' },
+            address: { type: 'string' },   city:   { type: 'string' },
+            state: { type: 'string' },     zip:    { type: 'string' },
+            notes: { type: 'string' },     source: { type: 'string' },
           },
           required: ['firstName', 'lastName'],
         },
       },
+      // ── General ─────────────────────────────────────────────────────
       {
         name: 'get_general_info',
-        description: 'Get general information or answer questions that don\'t require accessing specific tools. Use this for general knowledge, calculations, or conversational responses.',
-        input_schema: {
-          type: 'object' as const,
-          properties: {
-            query: {
-              type: 'string',
-              description: 'The user\'s question or request'
-            }
-          },
-          required: ['query']
-        }
-      }
+        description: 'Answer general questions, do calculations, or reason about information without calling other tools.',
+        input_schema: { type: 'object' as const, properties: { query: { type: 'string' } }, required: ['query'] },
+      },
     ];
   }
 
@@ -418,19 +479,69 @@ export class AIVoiceService {
     args: any,
     sessionId: string,
   ): Promise<any> {
+    const uid = 'default-user';
     switch (functionName) {
+      // ── Knowledge Base ─────────────────────────────────────────────
       case 'search_knowledge_base':
         return this.searchKnowledgeBase(args.query, args.filter, sessionId);
 
-      case 'check_calendar':
-        return this.checkCalendar(args.start_date, args.end_date, args.search_query, sessionId);
+      // ── Email READ ─────────────────────────────────────────────────
+      case 'read_emails':
+        return this.gmailService.readEmails(args.maxResults ?? 20, args.query, args.unreadOnly ?? false, uid);
 
-      case 'create_calendar_event':
-        return this.createCalendarEvent(args, sessionId);
+      case 'search_emails':
+        return this.gmailService.searchEmails(args.query, args.maxResults ?? 20, uid);
 
+      case 'get_email':
+        return this.gmailService.getEmail(args.messageId, uid);
+
+      case 'get_thread':
+        return this.gmailService.getThread(args.threadId, uid);
+
+      case 'list_email_labels':
+        return this.gmailService.listLabels(uid);
+
+      // ── Email WRITE ────────────────────────────────────────────────
       case 'send_email':
         return this.sendEmail(args, sessionId);
 
+      case 'reply_email':
+        return this.gmailService.replyToEmail(args.messageId, args.body, args.replyAll ?? false, uid);
+
+      case 'delete_email':
+        return this.gmailService.deleteEmail(args.messageId, uid);
+
+      case 'archive_email':
+        return this.gmailService.archiveEmail(args.messageId, uid);
+
+      case 'mark_email_read':
+        return this.gmailService.markRead(args.messageId, args.read, uid);
+
+      // ── Calendar READ ──────────────────────────────────────────────
+      case 'check_calendar':
+        return this.checkCalendar(args.start_date, args.end_date, args.search_query, sessionId);
+
+      case 'search_calendar':
+        return this.googleCalendar.searchEvents(uid, args.query, args.maxResults ?? 20);
+
+      // ── Calendar WRITE ─────────────────────────────────────────────
+      case 'create_calendar_event':
+        return this.createCalendarEvent(args, sessionId);
+
+      case 'update_calendar_event':
+        return this.googleCalendar.updateEvent(uid, args.eventId, {
+          title:       args.title,
+          startTime:   args.start_time,
+          endTime:     args.end_time,
+          description: args.description,
+          location:    args.location,
+          attendees:   args.attendees,
+        });
+
+      case 'delete_calendar_event':
+        return this.googleCalendar.deleteEvent(uid, args.eventId);
+
+      // ── CRM ────────────────────────────────────────────────────────
       case 'get_crm_jobs':
         return this.accuLynx.getJobs({ search: args.search, status: args.status, page: args.page, pageSize: args.pageSize });
 
@@ -446,6 +557,7 @@ export class AIVoiceService {
       case 'crm_create_lead':
         return this.accuLynx.createLead(args);
 
+      // ── General ────────────────────────────────────────────────────
       case 'get_general_info':
         return this.getGeneralInfo(args.query);
 
