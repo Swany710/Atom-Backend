@@ -93,6 +93,13 @@ export class EmailOAuthService {
     return this.exchangeMicrosoftCode(payload.userId, code);
   }
 
+  /** Remove a stored OAuth connection so the user can reconnect with a different account. */
+  async disconnectProvider(provider: EmailProviderName, userId: string): Promise<void> {
+    this.validateProvider(provider);
+    await this.connectionRepo.delete({ userId, provider });
+    this.logger.log(`OAuth connection removed: ${provider} / ${userId}`);
+  }
+
   async getConnectionStatus(provider: EmailProviderName, userId: string) {
     this.validateProvider(provider);
     const connection = await this.connectionRepo.findOne({
@@ -202,15 +209,23 @@ export class EmailOAuthService {
 
     const emailAddress = profileResponse.data.emailAddress;
 
-    return this.connectionRepo.save({
+    // Upsert: update existing connection if present, otherwise create new.
+    // Without this, re-connecting the same userId would hit the unique
+    // constraint on (userId, provider) and throw a DB error.
+    const existing = await this.connectionRepo.findOne({
+      where: { userId, provider: 'gmail' },
+    });
+    const entity = existing ?? this.connectionRepo.create();
+    Object.assign(entity, {
       userId,
-      provider: 'gmail',
+      provider: 'gmail' as EmailProviderName,
       emailAddress,
-      accessToken: access_token,
-      refreshToken: refresh_token,
-      expiresAt: expires_in ? new Date(Date.now() + expires_in * 1000) : undefined,
+      accessToken:  access_token,
+      refreshToken: refresh_token ?? entity.refreshToken, // keep old refresh token if Google omits it
+      expiresAt:    expires_in ? new Date(Date.now() + expires_in * 1000) : undefined,
       scope,
     });
+    return this.connectionRepo.save(entity);
   }
 
   /**
@@ -256,15 +271,20 @@ export class EmailOAuthService {
 
     const emailAddress = profileResponse.data.mail || profileResponse.data.userPrincipalName;
 
-    return this.connectionRepo.save({
+    const existing = await this.connectionRepo.findOne({
+      where: { userId, provider: 'outlook' },
+    });
+    const entity = existing ?? this.connectionRepo.create();
+    Object.assign(entity, {
       userId,
-      provider: 'outlook',
+      provider: 'outlook' as EmailProviderName,
       emailAddress,
-      accessToken: access_token,
-      refreshToken: refresh_token,
-      expiresAt: expires_in ? new Date(Date.now() + expires_in * 1000) : undefined,
+      accessToken:  access_token,
+      refreshToken: refresh_token ?? entity.refreshToken,
+      expiresAt:    expires_in ? new Date(Date.now() + expires_in * 1000) : undefined,
       scope: grantedScope,
     });
+    return this.connectionRepo.save(entity);
   }
 
   private getGoogleScopes(): string[] {
@@ -273,6 +293,9 @@ export class EmailOAuthService {
       'https://www.googleapis.com/auth/gmail.readonly',
       'https://www.googleapis.com/auth/gmail.modify',
       'https://www.googleapis.com/auth/userinfo.email',
+      // Calendar scopes — needed for GoogleCalendarService
+      'https://www.googleapis.com/auth/calendar',
+      'https://www.googleapis.com/auth/calendar.events',
     ];
 
     const configured = this.config.get<string>('GOOGLE_SCOPES');

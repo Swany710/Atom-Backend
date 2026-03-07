@@ -1,4 +1,4 @@
-import { Controller, Get, Query, Res, HttpStatus, Inject } from '@nestjs/common';
+import { Controller, Get, Delete, Query, Res, HttpStatus, Inject } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Public } from '../../decorators/public.decorator';
 import { EmailOAuthService } from './email-oauth.service';
@@ -111,5 +111,25 @@ export class EmailOAuthController {
         : null,
       setupRequired: !oauthConfigured,
     };
+  }
+
+  /**
+   * Disconnect (delete) a stored OAuth connection so the user can
+   * reconnect with a different account.  Safe to call even if no
+   * connection exists — returns { success: true } either way.
+   *
+   * DELETE /email/oauth/disconnect?provider=gmail&userId=default-user
+   */
+  @Delete('disconnect')
+  async disconnect(
+    @Query('provider') provider: string,
+    @Query('userId') userId = 'default-user',
+  ) {
+    try {
+      await this.emailOAuthService.disconnectProvider(provider as any, userId);
+      return { success: true, message: `${provider} disconnected.` };
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
   }
 }
