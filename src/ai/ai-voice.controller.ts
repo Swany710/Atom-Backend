@@ -182,4 +182,30 @@ export class AIVoiceController {
       });
     }
   }
+
+  // ── POST /ai/speak  ─────────────────────────────────────────────────────
+  // Converts text to speech and returns audio/mpeg binary.
+  // Body: { text: string, voice?: string }
+  @Post('speak')
+  @Public()
+  async speak(
+    @Body('text') text: string,
+    @Body('voice') voice: string,
+    @Response() res: ExpressResponse,
+  ) {
+    if (!text?.trim()) {
+      return res.status(400).json({ error: 'text is required' });
+    }
+    try {
+      const audio = await this.aiVoiceService.generateSpeech(
+        text,
+        (voice as any) || 'nova',
+      );
+      res.setHeader('Content-Type', 'audio/mpeg');
+      res.setHeader('Cache-Control', 'no-store');
+      res.send(audio);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
 }

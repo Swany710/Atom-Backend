@@ -778,4 +778,24 @@ READ-ONLY tools need NO confirmation — call them immediately:
       );
     }
   }
+
+  /** Standalone TTS – converts any text to audio/mpeg via OpenAI TTS */
+  async generateSpeech(
+    text: string,
+    voice: 'alloy' | 'echo' | 'fable' | 'onyx' | 'nova' | 'shimmer' = 'nova',
+  ): Promise<Buffer> {
+    const cleaned = text
+      .replace(/```[\s\S]*?```/g, '')          // strip code blocks
+      .replace(/\*\*|__|\*|_|~~|`/g, '')       // strip markdown symbols
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // links → keep label text
+      .trim()
+      .slice(0, 4096);
+
+    const speechResponse = await this.openai.audio.speech.create({
+      model: 'tts-1',
+      voice,
+      input: cleaned || 'I had nothing to say.',
+    });
+    return Buffer.from(await speechResponse.arrayBuffer());
+  }
 }
