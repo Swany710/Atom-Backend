@@ -31,6 +31,7 @@ export class EmailController {
     @Param('provider') provider: EmailProviderName,
     @Req() req: any,
   ) {
+    const userId: string = (req as any).atomUserId;
     if (!userId) throw new BadRequestException('userId is required.');
     return { provider, authUrl: this.emailOAuthService.getAuthUrl(provider, userId) };
   }
@@ -56,10 +57,10 @@ export class EmailController {
   /* ── Read / Browse ─────────────────────────────────────────────── */
   @Get('read')
   async readEmails(
+    @Req() req: any,
     @Query('maxResults') maxResults?: string,
     @Query('query') query?: string,
     @Query('unreadOnly') unreadOnly?: string,
-    @Req() req: any,
   ) {
     const userId: string = (req as any).atomUserId;
     const max    = maxResults ? parseInt(maxResults, 10) || 20 : 20;
@@ -69,9 +70,9 @@ export class EmailController {
 
   @Get('search')
   async searchEmails(
+    @Req() req: any,
     @Query('q') q: string,
     @Query('maxResults') maxResults?: string,
-    @Req() req: any,
   ) {
     const userId: string = (req as any).atomUserId;
     if (!q) throw new BadRequestException('q is required');
@@ -99,10 +100,10 @@ export class EmailController {
   /* ── Reply ─────────────────────────────────────────────────────── */
   @Post('reply')
   async replyToEmail(
+    @Req() req: any,
     @Body('messageId') messageId: string,
     @Body('body') body: string,
     @Body('replyAll') replyAll?: string,
-    @Req() req: any,
   ) {
     const userId: string = (req as any).atomUserId;
     if (!messageId || !body) throw new BadRequestException('messageId and body are required');
@@ -142,7 +143,9 @@ export class EmailController {
   ) {
     const userId: string = (req as any).atomUserId;
     return this.gmailService.moveEmail(id, addLabelIds, removeLabelIds, userId);
-    /* ── Sent ──────────────────────────────────────────────────────── */
+  }
+
+  /* ── Sent ──────────────────────────────────────────────────────── */
   @Get('sent')
   async getSent(
     @Req() req: any,
