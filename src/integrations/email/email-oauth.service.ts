@@ -331,9 +331,16 @@ export class EmailOAuthService {
    * Payload fields: userId, provider, nonce (hex), timestamp (ms since epoch)
    */
   private encodeState(payload: { userId: string; provider: EmailProviderName }): string {
-    const secret = this.config.get<string>('OAUTH_STATE_SECRET');
+    const isProd = process.env.NODE_ENV === 'production';
+    let secret = this.config.get<string>('OAUTH_STATE_SECRET');
     if (!secret) {
-      throw new Error('OAUTH_STATE_SECRET is not configured');
+      if (isProd) {
+        throw new Error('OAUTH_STATE_SECRET is not configured');
+      }
+      // Dev fallback — NOT safe for production; validateProductionEnv() will
+      // catch this and refuse to start if NODE_ENV=production.
+      console.warn('⚠️  OAUTH_STATE_SECRET not set — using insecure dev fallback. Set it in .env for real security.');
+      secret = 'dev-fallback-UNSAFE-do-not-use-in-prod';
     }
     const nonce = crypto.randomBytes(16).toString('hex');
     const full  = { ...payload, nonce, timestamp: Date.now() };
@@ -356,7 +363,9 @@ export class EmailOAuthService {
       const data = state.slice(0, dotIndex);
       const sig  = state.slice(dotIndex + 1);
 
-      const secret = this.config.get<string>('OAUTH_STATE_SECRET');
+      const isProd = process.env.NODE_ENV === 'production';
+      const secret = this.config.get<string>('OAUTH_STATE_SECRET')
+        ?? (isProd ? null : 'dev-fallback-UNSAFE-do-not-use-in-prod');
       if (!secret) throw new Error('OAUTH_STATE_SECRET not configured');
 
       const expected = crypto.createHmac('sha256', secret).update(data).digest('base64url');

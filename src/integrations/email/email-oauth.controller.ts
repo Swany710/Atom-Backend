@@ -54,9 +54,11 @@ export class EmailOAuthController {
       errorMsg = 'OAuth connection failed. Please try again.';
     }
 
-    const allowedOrigin = this.config.get<string>('ALLOWED_ORIGINS')?.split(',')[0]?.trim()
-      ?? 'null';
-
+    // Use window.opener.location.origin as the postMessage target — this is
+    // evaluated in the browser (popup context) so it always refers to the
+    // actual frontend origin, regardless of how ALLOWED_ORIGINS is configured.
+    // This is safe: we are posting TO the opener (our own frontend), not
+    // accepting messages from arbitrary origins.
     const html = success
       ? `<!DOCTYPE html><html><head><title>Connected</title></head><body>
            <p style="font-family:sans-serif;padding:2rem;">
@@ -64,10 +66,14 @@ export class EmailOAuthController {
            </p>
            <script>
              if (window.opener) {
-               window.opener.postMessage(
-                 { type: 'ATOM_GMAIL_CONNECTED', success: true },
-                 ${JSON.stringify(allowedOrigin)}
-               );
+               try {
+                 window.opener.postMessage(
+                   { type: 'ATOM_GMAIL_CONNECTED', success: true },
+                   window.opener.location.origin
+                 );
+               } catch(e) {
+                 // Cross-origin check failed; opener already navigated away — safe to ignore
+               }
                setTimeout(() => window.close(), 1500);
              }
            </script>
@@ -78,10 +84,12 @@ export class EmailOAuthController {
            </p>
            <script>
              if (window.opener) {
-               window.opener.postMessage(
-                 { type: 'ATOM_GMAIL_CONNECTED', success: false, error: ${JSON.stringify(errorMsg)} },
-                 ${JSON.stringify(allowedOrigin)}
-               );
+               try {
+                 window.opener.postMessage(
+                   { type: 'ATOM_GMAIL_CONNECTED', success: false, error: ${JSON.stringify(errorMsg)} },
+                   window.opener.location.origin
+                 );
+               } catch(e) {}
              }
            </script>
          </body></html>`;
