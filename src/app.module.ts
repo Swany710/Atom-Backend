@@ -1,7 +1,8 @@
-import { Module } from '@nestjs/common';
+import { Module, MiddlewareConsumer, NestModule } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AIVoiceModule } from './ai/ai-voice.module';
@@ -11,6 +12,9 @@ import { CalendarModule } from './integrations/calendar/calendar.module';
 import { CrmModule } from './integrations/crm/crm.module';
 import { KnowledgeBaseModule } from './knowledge-base/knowledge-base.module';
 import { ApiKeyGuard } from './guards/api-key.guard';
+import { HealthModule } from './health/health.module';
+import { AuditModule } from './audit/audit.module';
+import { CorrelationMiddleware } from './middleware/correlation.middleware';
 
 const isProd = process.env.NODE_ENV === 'production';
 
@@ -28,6 +32,8 @@ const isProd = process.env.NODE_ENV === 'production';
         //    Disabled in production to prevent accidental data loss.
         //    Run migrations manually before deploying schema changes.
         synchronize: !isProd,
+        migrationsRun: isProd,
+        migrations: ['dist/migrations/*.js'],
         autoLoadEntities: true,
         // SSL: on for Supabase by default.
         // Set DATABASE_TLS_STRICT=true to enforce certificate validation.
@@ -42,7 +48,18 @@ const isProd = process.env.NODE_ENV === 'production';
         },
       }),
     }),
+    // Rate limiting: 120 requests per minute per IP globally.
+    // Adjust limits per-route with @Throttle({ default: { limit, ttl } }).
+    ThrottlerModule.forRoot([
+      {
+        name: 'default',
+        ttl: 60_000,   // 1 minute window (ms)
+        limit: 120,    // max requests per window
+      },
+    ]),
     TypeOrmModule.forFeature([ChatMemory]),
+    HealthModule,
+    AuditModule,
     AIVoiceModule,
     EmailModule,
     CalendarModule,
@@ -52,15 +69,20 @@ const isProd = process.env.NODE_ENV === 'production';
   controllers: [AppController],
   providers: [
     AppService,
-    // Global API-key guard — set API_KEY env var to enable, leave unset for open/dev mode
+    // Global API-key guard — must come before ThrottlerGuard in the array
     { provide: APP_GUARD, useClass: ApiKeyGuard },
+    // Rate-limit guard applied after auth so unauthenticated requests are
+    // rejected by ApiKeyGuard first (no wasted throttle counter slots).
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
   ],
 })
-export class AppModule {
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    // Attach correlation IDs to every incoming request
+    consumer.apply(CorrelationMiddleware).forRoutes('*');
+  }
+
   constructor() {
     console.log(`✅ Atom App Module loaded (NODE_ENV=${process.env.NODE_ENV ?? 'development'})`);
-    if (isProd && !process.env.API_KEY) {
-      console.warn('⚠️  API_KEY is not set — all routes are unauthenticated in production!');
-    }
   }
 }

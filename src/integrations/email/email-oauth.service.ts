@@ -45,9 +45,14 @@ interface TokenResponse {
   scope?: string;
 }
 
+/** Maximum age (ms) of an OAuth state token before it is rejected */
+const OAUTH_STATE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
 @Injectable()
 export class EmailOAuthService {
   private readonly logger = new Logger(EmailOAuthService.name);
+  /** In-memory nonce store — prevents OAuth state replay attacks */
+  private readonly usedNonces = new Set<string>();
 
   constructor(
     private readonly config: ConfigService,
@@ -76,8 +81,12 @@ export class EmailOAuthService {
     let resolvedProvider: EmailProviderName = provider as EmailProviderName;
     if (!resolvedProvider && state) {
       try {
+        // Pre-verify just enough to extract provider before full parseState validation.
+        // The state format is base64url(JSON).signature — extract the data part only.
+        const dotIndex = state.lastIndexOf('.');
+        const dataPart = dotIndex !== -1 ? state.slice(0, dotIndex) : state;
         const decoded = JSON.parse(
-          Buffer.from(state, 'base64url').toString('utf-8'),
+          Buffer.from(dataPart, 'base64url').toString('utf-8'),
         ) as { userId: string; provider: EmailProviderName };
         resolvedProvider = decoded.provider;
       } catch {
@@ -316,44 +325,83 @@ export class EmailOAuthService {
     return configured ? configured.split(',').map(scope => scope.trim()) : defaultScopes;
   }
 
-  /** Build a signed state token: base64url(JSON) + "." + HMAC-SHA256 */
+  /**
+   * Build a signed state token with timestamp and nonce.
+   * Format: base64url(JSON) + "." + HMAC-SHA256
+   * Payload fields: userId, provider, nonce (hex), timestamp (ms since epoch)
+   */
   private encodeState(payload: { userId: string; provider: EmailProviderName }): string {
-    const secret = this.config.get<string>('OAUTH_STATE_SECRET') ?? 'dev-insecure-secret';
-    const data   = Buffer.from(JSON.stringify(payload)).toString('base64url');
-    const sig    = crypto.createHmac('sha256', secret).update(data).digest('base64url');
+    const secret = this.config.get<string>('OAUTH_STATE_SECRET');
+    if (!secret) {
+      throw new Error('OAUTH_STATE_SECRET is not configured');
+    }
+    const nonce = crypto.randomBytes(16).toString('hex');
+    const full  = { ...payload, nonce, timestamp: Date.now() };
+    const data  = Buffer.from(JSON.stringify(full)).toString('base64url');
+    const sig   = crypto.createHmac('sha256', secret).update(data).digest('base64url');
     return `${data}.${sig}`;
   }
 
-  /** Verify HMAC signature then decode state payload */
+  /**
+   * Verify HMAC signature, timestamp (< 5 min), and nonce (not replayed).
+   * Throws BadRequestException on any validation failure.
+   */
   private parseState(state: string, provider: EmailProviderName) {
     if (!state) throw new BadRequestException('Missing OAuth state.');
 
     try {
       const dotIndex = state.lastIndexOf('.');
-      if (dotIndex === -1) throw new Error('Malformed state (no signature)');
+      if (dotIndex === -1) throw new Error('Malformed state: no signature');
 
       const data = state.slice(0, dotIndex);
       const sig  = state.slice(dotIndex + 1);
 
-      const secret   = this.config.get<string>('OAUTH_STATE_SECRET') ?? 'dev-insecure-secret';
-      const expected = crypto.createHmac('sha256', secret).update(data).digest('base64url');
+      const secret = this.config.get<string>('OAUTH_STATE_SECRET');
+      if (!secret) throw new Error('OAUTH_STATE_SECRET not configured');
 
-      if (!crypto.timingSafeEqual(Buffer.from(sig, 'base64url'), Buffer.from(expected, 'base64url'))) {
+      const expected = crypto.createHmac('sha256', secret).update(data).digest('base64url');
+      const sigBuf   = Buffer.from(sig, 'base64url');
+      const expBuf   = Buffer.from(expected, 'base64url');
+
+      if (sigBuf.length !== expBuf.length ||
+          !crypto.timingSafeEqual(sigBuf, expBuf)) {
         throw new Error('State signature mismatch');
       }
 
       const payload = JSON.parse(Buffer.from(data, 'base64url').toString('utf-8')) as {
         userId: string;
         provider: EmailProviderName;
+        nonce: string;
+        timestamp: number;
       };
 
+      // Validate provider match
       if (!payload.userId || payload.provider !== provider) {
-        throw new Error('Invalid state payload');
+        throw new Error('Invalid state payload fields');
+      }
+
+      // Validate timestamp: reject states older than TTL
+      const age = Date.now() - (payload.timestamp ?? 0);
+      if (age > OAUTH_STATE_TTL_MS || age < 0) {
+        throw new Error(`OAuth state expired or has future timestamp (age: ${age}ms)`);
+      }
+
+      // Validate nonce: reject replayed states
+      if (!payload.nonce) throw new Error('Missing nonce in state');
+      if (this.usedNonces.has(payload.nonce)) {
+        throw new Error('OAuth state nonce already used (replay attack)');
+      }
+      this.usedNonces.add(payload.nonce);
+
+      // Trim nonce store to prevent unbounded memory growth
+      if (this.usedNonces.size > 10_000) {
+        const first = this.usedNonces.values().next().value;
+        if (first !== undefined) this.usedNonces.delete(first);
       }
 
       return payload;
     } catch (error) {
-      this.logger.error('Failed to parse OAuth state', error as any);
+      this.logger.warn('OAuth state validation failed', error as any);
       throw new BadRequestException('Invalid OAuth state.');
     }
   }

@@ -7,6 +7,7 @@ import {
   Get,
   Param,
   Delete,
+  Req,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ConfigService } from '@nestjs/config';
@@ -45,19 +46,22 @@ export class AppController {
   @UseInterceptors(FileInterceptor('audio'))
   async handleVoice(
     @UploadedFile() file: Express.Multer.File,
-    @Body() body: { userId?: string; conversationId?: string },
+    @Req() req: any,
+    @Body() body: { conversationId?: string },
   ) {
+    // Identity always comes from the guard-injected atomUserId, not from client body
+    const userId: string = req.atomUserId;
+
     if (!file?.buffer || file.size < 1_000) {
       return {
         message: 'Audio too short — please speak for at least one second.',
         transcription: '[Too Short]',
-        conversationId: body.conversationId ?? body.userId ?? 'voice-error',
+        conversationId: body.conversationId ?? userId,
         timestamp: new Date(),
       };
     }
 
     try {
-      const userId  = body.userId  ?? 'default-user';
       const convoId = body.conversationId ?? userId;
       // Pass the actual MIME type so the service saves the temp file with the
       // correct extension (e.g. .webm) — Whisper infers format from extension.
@@ -79,7 +83,7 @@ export class AppController {
       return {
         message:        `Sorry, voice processing hit an error: ${msg}`,
         transcription:  '[Error]',
-        conversationId: body.conversationId ?? body.userId ?? 'voice-error',
+        conversationId: body.conversationId ?? userId,
         timestamp:      new Date(),
       };
     }

@@ -1,4 +1,4 @@
-import { Controller, Get, Delete, Query, Res, HttpStatus, Inject } from '@nestjs/common';
+import { Controller, Get, Delete, Query, Res, HttpStatus, Req } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Public } from '../../decorators/public.decorator';
 import { EmailOAuthService } from './email-oauth.service';
@@ -6,11 +6,12 @@ import { GmailService } from './gmail.service';
 import { EmailProviderName } from './email.types';
 
 /**
- * Controller to handle OAuth-related HTTP endpoints for email providers.
- * All routes are @Public() — they must be reachable before any API key
- * is set (and the OAuth callback is hit by Google, not by our own client).
+ * OAuth flow endpoints for email providers.
+ *
+ * Only /callback is @Public() — Google redirects here without our auth header.
+ * All other endpoints require Authorization: Bearer <API_KEY> via the global guard.
+ * userId is always resolved server-side from req.atomUserId, never from query params.
  */
-@Public()
 @Controller('email/oauth')
 export class EmailOAuthController {
   constructor(
@@ -19,20 +20,22 @@ export class EmailOAuthController {
     private readonly config: ConfigService,
   ) {}
 
-  /** Generate an authorization URL for the specified email provider. */
+  /** Generate an authorization URL. userId resolved server-side only. */
   @Get('url')
   getAuthUrl(
+    @Req() req: any,
     @Query('provider') provider: EmailProviderName,
-    @Query('userId') userId: string,
   ) {
+    const userId: string = req.atomUserId;
     return this.emailOAuthService.getAuthUrl(provider, userId);
   }
 
   /**
-   * Handle the OAuth callback after the user has granted access.
-   * Returns an HTML page that closes the OAuth popup and notifies the
-   * parent window (the Atom settings panel) that the connection succeeded.
+   * OAuth callback — MUST be @Public() because Google/Microsoft redirects
+   * here directly, without our Authorization header.
+   * userId is recovered from the signed HMAC state, not from query params.
    */
+  @Public()
   @Get('callback')
   async handleCallback(
     @Query('provider') provider: EmailProviderName | undefined,
@@ -47,33 +50,38 @@ export class EmailOAuthController {
       await this.emailOAuthService.handleCallback(provider, code, state);
       success = true;
     } catch (err) {
-      errorMsg = err instanceof Error ? err.message : String(err);
+      // Return generic error to client — no internal details
+      errorMsg = 'OAuth connection failed. Please try again.';
     }
 
-    // Return HTML that closes the popup and tells the parent window the result
+    const allowedOrigin = this.config.get<string>('ALLOWED_ORIGINS')?.split(',')[0]?.trim()
+      ?? 'null';
+
     const html = success
       ? `<!DOCTYPE html><html><head><title>Connected</title></head><body>
            <p style="font-family:sans-serif;padding:2rem;">
-             ✅ Gmail connected! You can close this window.
+             Gmail connected! You can close this window.
            </p>
            <script>
              if (window.opener) {
-               window.opener.postMessage({ type: 'ATOM_GMAIL_CONNECTED', success: true }, window.opener.location.origin);
+               window.opener.postMessage(
+                 { type: 'ATOM_GMAIL_CONNECTED', success: true },
+                 ${JSON.stringify(allowedOrigin)}
+               );
                setTimeout(() => window.close(), 1500);
              }
            </script>
          </body></html>`
       : `<!DOCTYPE html><html><head><title>Error</title></head><body>
            <p style="font-family:sans-serif;padding:2rem;color:red;">
-             ❌ Connection failed: ${errorMsg}
+             ${errorMsg}
            </p>
            <script>
              if (window.opener) {
-               window.opener.postMessage({
-                 type: 'ATOM_GMAIL_CONNECTED',
-                 success: false,
-                 error: ${JSON.stringify(errorMsg)}
-               }, window.opener.location.origin);
+               window.opener.postMessage(
+                 { type: 'ATOM_GMAIL_CONNECTED', success: false, error: ${JSON.stringify(errorMsg)} },
+                 ${JSON.stringify(allowedOrigin)}
+               );
              }
            </script>
          </body></html>`;
@@ -81,22 +89,23 @@ export class EmailOAuthController {
     return res.status(HttpStatus.OK).send(html);
   }
 
-  /** Check whether a user has an active email connection for the given provider. */
+  /** Connection status. userId resolved server-side only. */
   @Get('status')
   async getStatus(
+    @Req() req: any,
     @Query('provider') provider: EmailProviderName,
-    @Query('userId') userId: string,
   ) {
+    const userId: string = req.atomUserId;
     return this.emailOAuthService.getConnectionStatus(provider, userId);
   }
 
   /**
-   * Enriched settings status: returns Gmail connection info, the "from"
-   * email address, and whether the Google OAuth credentials are configured.
-   * Used by the Atom settings panel.
+   * Enriched Gmail status for the settings panel.
+   * userId resolved server-side only.
    */
   @Get('gmail-status')
-  async getGmailStatus(@Query('userId') userId = 'default-user') {
+  async getGmailStatus(@Req() req: any) {
+    const userId: string = req.atomUserId;
     const status = await this.gmailService.getConnectionStatus(userId);
     const oauthConfigured = !!(
       this.config.get('GOOGLE_CLIENT_ID') &&
@@ -106,27 +115,23 @@ export class EmailOAuthController {
     return {
       ...status,
       oauthConfigured,
-      connectUrl: oauthConfigured
-        ? null   // frontend will fetch /email/oauth/url to get the real URL
-        : null,
+      connectUrl: null,  // frontend fetches /email/oauth/url for the real URL
       setupRequired: !oauthConfigured,
     };
   }
 
   /**
-   * Disconnect (delete) a stored OAuth connection so the user can
-   * reconnect with a different account.  Safe to call even if no
-   * connection exists — returns { success: true } either way.
-   *
-   * DELETE /email/oauth/disconnect?provider=gmail&userId=default-user
+   * Disconnect a stored OAuth connection. userId resolved server-side only.
+   * DELETE /email/oauth/disconnect?provider=gmail
    */
   @Delete('disconnect')
   async disconnect(
+    @Req() req: any,
     @Query('provider') provider: string,
-    @Query('userId') userId = 'default-user',
   ) {
+    const userId: string = req.atomUserId;
     try {
-      await this.emailOAuthService.disconnectProvider(provider as any, userId);
+      await this.emailOAuthService.disconnectProvider(provider as EmailProviderName, userId);
       return { success: true, message: `${provider} disconnected.` };
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : String(err) };

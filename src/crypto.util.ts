@@ -22,7 +22,12 @@ function getKey(): Buffer | null {
 
 export function encryptToken(plaintext: string): string {
   const key = getKey();
-  if (!key) return plaintext; // no key configured → store plaintext
+  if (!key) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('TOKEN_ENCRYPTION_KEY is required in production but not configured');
+    }
+    return plaintext; // dev mode only — store plaintext
+  }
 
   const iv         = crypto.randomBytes(IV_LEN);
   const cipher     = crypto.createCipheriv(ALG, key, iv);
