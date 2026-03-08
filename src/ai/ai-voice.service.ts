@@ -479,7 +479,8 @@ READ-ONLY tools need NO confirmation — call them immediately:
     args: any,
     sessionId: string,
   ): Promise<any> {
-    const uid = 'default-user';
+    // sessionId is the userId injected by req.atomUserId in the controller
+    const uid = sessionId;
     switch (functionName) {
       // ── Knowledge Base ─────────────────────────────────────────────
       case 'search_knowledge_base':
@@ -613,7 +614,7 @@ READ-ONLY tools need NO confirmation — call them immediately:
     this.logger.log(`Checking calendar: ${startDate} to ${endDate}`);
     // Try Google Calendar first (OAuth-based), fall back to Microsoft Graph
     try {
-      const userId = sessionId ?? 'default-user';
+      const userId = sessionId ?? '';
       const status = await this.googleCalendar.getConnectionStatus(userId);
       if (status.connected) {
         const days = endDate
@@ -630,7 +631,7 @@ READ-ONLY tools need NO confirmation — call them immediately:
     this.logger.log(`Creating calendar event: ${args.title}`);
     // Try Google Calendar first
     try {
-      const userId = sessionId ?? 'default-user';
+      const userId = sessionId ?? '';
       const status = await this.googleCalendar.getConnectionStatus(userId);
       if (status.connected) {
         return this.googleCalendar.createEvent(
