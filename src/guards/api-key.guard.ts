@@ -14,6 +14,9 @@ import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
  * - If API_KEY env var is not set  → guard is disabled (dev / no-auth mode).
  * - If API_KEY is set              → every non-@Public() request must supply
  *                                    `Authorization: Bearer <key>`.
+ * - After auth passes, req.atomUserId is set from OWNER_USER_ID env var
+ *   (defaults to "default-user").  Controllers must read req.atomUserId
+ *   instead of trusting any client-supplied userId.
  */
 @Injectable()
 export class ApiKeyGuard implements CanActivate {
@@ -23,7 +26,6 @@ export class ApiKeyGuard implements CanActivate {
   ) {}
 
   canActivate(context: ExecutionContext): boolean {
-    // Route decorated with @Public() always passes through
     const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
       context.getHandler(),
       context.getClass(),
@@ -31,15 +33,18 @@ export class ApiKeyGuard implements CanActivate {
     if (isPublic) return true;
 
     const apiKey = this.config.get<string>('API_KEY');
-    if (!apiKey) return true; // No key configured → open (development mode)
+    const req = context.switchToHttp().getRequest<Record<string, any>>();
 
-    const req = context.switchToHttp().getRequest<{ headers: Record<string, string> }>();
-    const auth: string = req.headers['authorization'] ?? '';
-    const [scheme, token] = auth.split(' ');
-
-    if (scheme !== 'Bearer' || token !== apiKey) {
-      throw new UnauthorizedException('Invalid or missing API key');
+    if (apiKey) {
+      const auth: string = req.headers?.['authorization'] ?? '';
+      const [scheme, token] = auth.split(' ');
+      if (scheme !== 'Bearer' || token !== apiKey) {
+        throw new UnauthorizedException('Invalid or missing API key');
+      }
     }
+
+    // Attach the server-side owner identity — never trust client-supplied userId
+    req.atomUserId = this.config.get<string>('OWNER_USER_ID') ?? 'default-user';
     return true;
   }
 }

@@ -58,7 +58,7 @@ export class EmailOAuthController {
            </p>
            <script>
              if (window.opener) {
-               window.opener.postMessage({ type: 'ATOM_GMAIL_CONNECTED', success: true }, '*');
+               window.opener.postMessage({ type: 'ATOM_GMAIL_CONNECTED', success: true }, window.opener.location.origin);
                setTimeout(() => window.close(), 1500);
              }
            </script>
@@ -73,7 +73,7 @@ export class EmailOAuthController {
                  type: 'ATOM_GMAIL_CONNECTED',
                  success: false,
                  error: ${JSON.stringify(errorMsg)}
-               }, '*');
+               }, window.opener.location.origin);
              }
            </script>
          </body></html>`;

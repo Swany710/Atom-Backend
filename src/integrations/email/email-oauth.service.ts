@@ -1,3 +1,5 @@
+import * as crypto from 'crypto';
+import { encryptToken, decryptToken } from '../../crypto.util';
 import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -220,8 +222,8 @@ export class EmailOAuthService {
       userId,
       provider: 'gmail' as EmailProviderName,
       emailAddress,
-      accessToken:  access_token,
-      refreshToken: refresh_token ?? entity.refreshToken, // keep old refresh token if Google omits it
+      accessToken: encryptToken(access_token),
+      refreshToken: refresh_token ? encryptToken(refresh_token) : entity.refreshToken ?? entity.refreshToken, // keep old refresh token if Google omits it
       expiresAt:    expires_in ? new Date(Date.now() + expires_in * 1000) : undefined,
       scope,
     });
@@ -279,8 +281,8 @@ export class EmailOAuthService {
       userId,
       provider: 'outlook' as EmailProviderName,
       emailAddress,
-      accessToken:  access_token,
-      refreshToken: refresh_token ?? entity.refreshToken,
+      accessToken: encryptToken(access_token),
+      refreshToken: refresh_token ? encryptToken(refresh_token) : entity.refreshToken ?? entity.refreshToken,
       expiresAt:    expires_in ? new Date(Date.now() + expires_in * 1000) : undefined,
       scope: grantedScope,
     });
@@ -314,18 +316,36 @@ export class EmailOAuthService {
     return configured ? configured.split(',').map(scope => scope.trim()) : defaultScopes;
   }
 
+  /** Build a signed state token: base64url(JSON) + "." + HMAC-SHA256 */
   private encodeState(payload: { userId: string; provider: EmailProviderName }): string {
-    return Buffer.from(JSON.stringify(payload)).toString('base64url');
+    const secret = this.config.get<string>('OAUTH_STATE_SECRET') ?? 'dev-insecure-secret';
+    const data   = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    const sig    = crypto.createHmac('sha256', secret).update(data).digest('base64url');
+    return `${data}.${sig}`;
   }
 
+  /** Verify HMAC signature then decode state payload */
   private parseState(state: string, provider: EmailProviderName) {
-    if (!state) {
-      throw new BadRequestException('Missing OAuth state.');
-    }
+    if (!state) throw new BadRequestException('Missing OAuth state.');
 
     try {
-      const decoded = Buffer.from(state, 'base64url').toString('utf-8');
-      const payload = JSON.parse(decoded) as { userId: string; provider: EmailProviderName };
+      const dotIndex = state.lastIndexOf('.');
+      if (dotIndex === -1) throw new Error('Malformed state (no signature)');
+
+      const data = state.slice(0, dotIndex);
+      const sig  = state.slice(dotIndex + 1);
+
+      const secret   = this.config.get<string>('OAUTH_STATE_SECRET') ?? 'dev-insecure-secret';
+      const expected = crypto.createHmac('sha256', secret).update(data).digest('base64url');
+
+      if (!crypto.timingSafeEqual(Buffer.from(sig, 'base64url'), Buffer.from(expected, 'base64url'))) {
+        throw new Error('State signature mismatch');
+      }
+
+      const payload = JSON.parse(Buffer.from(data, 'base64url').toString('utf-8')) as {
+        userId: string;
+        provider: EmailProviderName;
+      };
 
       if (!payload.userId || payload.provider !== provider) {
         throw new Error('Invalid state payload');

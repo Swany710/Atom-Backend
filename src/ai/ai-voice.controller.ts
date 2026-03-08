@@ -10,6 +10,7 @@ import {
   HttpStatus,
   Query,
   Response,
+  Req,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AIVoiceService } from './ai-voice.service';
@@ -21,8 +22,6 @@ import type { Response as ExpressResponse } from 'express';
 interface TextRequest {
   /** Natural language message from the user */
   message: string;
-  /** Caller-assigned user identifier (defaults to 'default-user') */
-  userId?: string;
   /** Pass an existing conversation ID to continue a thread */
   conversationId?: string;
 }
@@ -76,19 +75,22 @@ export class AIVoiceController {
   // ── Text ─────────────────────────────────────────────────────────────────
   /**
    * POST /api/v1/ai/text
-   * Body: { message, userId?, conversationId? }
+   * Body: { message, conversationId? }
    * Returns: { message, conversationId, timestamp }
    */
   @Post('text')
-  async handleText(@Body() body: TextRequest): Promise<TextResponse> {
+  async handleText(@Body() body: TextRequest, @Req() req: any): Promise<TextResponse> {
     if (!body?.message?.trim()) {
       throw new BadRequestException('message is required');
     }
 
+    // userId comes from the guard-injected atomUserId, never from the request body
+    const userId: string = req.atomUserId;
+
     try {
       const result = await this.aiVoiceService.processTextCommand(
         body.message,
-        body.userId ?? 'default-user',
+        userId,
         body.conversationId,
       );
 
@@ -110,7 +112,6 @@ export class AIVoiceController {
    * POST /api/v1/ai/voice
    * Multipart form-data fields:
    *   audio          – audio file (required)
-   *   userId         – optional, defaults to 'default-user'
    *   conversationId – optional; pass to continue a thread
    *
    * Query param:
@@ -119,20 +120,20 @@ export class AIVoiceController {
    *
    * Always returns JSON unless ?returnAudio=true is explicitly set.
    * Response headers always include X-Transcription, X-Response-Text, X-Conversation-Id.
+   * userId is always taken from the guard-injected req.atomUserId (never trusted from client).
    */
   @Post('voice')
   @UseInterceptors(FileInterceptor('audio'))
   async handleVoice(
     @UploadedFile() file: MulterFile,
     @Response() res: ExpressResponse,
-    @Body('userId') bodyUserId?: string,
+    @Req() req: any,
     @Body('conversationId') bodyConversationId?: string,
-    @Query('userId') queryUserId?: string,
     @Query('conversationId') queryConversationId?: string,
     @Query('returnAudio') returnAudio = 'false',
   ): Promise<void> {
-    // Accept userId / conversationId from either FormData body or query string
-    const userId = bodyUserId ?? queryUserId ?? 'default-user';
+    // userId comes from the guard-injected atomUserId, never from client input
+    const userId: string = req.atomUserId;
     const conversationId = bodyConversationId ?? queryConversationId;
 
     if (!file) {
@@ -187,7 +188,6 @@ export class AIVoiceController {
   // Converts text to speech and returns audio/mpeg binary.
   // Body: { text: string, voice?: string }
   @Post('speak')
-  @Public()
   async speak(
     @Body('text') text: string,
     @Body('voice') voice: string,
