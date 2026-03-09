@@ -3,12 +3,13 @@ import { ConfigService } from '@nestjs/config';
 import { Public } from '../../decorators/public.decorator';
 import { EmailOAuthService } from './email-oauth.service';
 import { GmailService } from './gmail.service';
+import { EmailService as OutlookEmailService } from './email.service';
 import { EmailProviderName } from './email.types';
 
 /**
  * OAuth flow endpoints for email providers.
  *
- * Only /callback is @Public() — Google redirects here without our auth header.
+ * Only /callback is @Public() — Google/Microsoft redirects here without our auth header.
  * All other endpoints require Authorization: Bearer <API_KEY> via the global guard.
  * userId is always resolved server-side from req.atomUserId, never from query params.
  */
@@ -17,10 +18,11 @@ export class EmailOAuthController {
   constructor(
     private readonly emailOAuthService: EmailOAuthService,
     private readonly gmailService: GmailService,
+    private readonly outlookService: OutlookEmailService,
     private readonly config: ConfigService,
   ) {}
 
-  /** Generate an authorization URL. userId resolved server-side only. */
+  /** Generate an authorization URL for any supported provider. userId resolved server-side only. */
   @Get('url')
   getAuthUrl(
     @Req() req: any,
@@ -33,7 +35,7 @@ export class EmailOAuthController {
   /**
    * OAuth callback — MUST be @Public() because Google/Microsoft redirects
    * here directly, without our Authorization header.
-   * userId is recovered from the signed HMAC state, not from query params.
+   * userId and provider are recovered from the signed HMAC state.
    */
   @Public()
   @Get('callback')
@@ -45,35 +47,49 @@ export class EmailOAuthController {
   ) {
     let success = false;
     let errorMsg = '';
+    let resolvedProvider: EmailProviderName = provider as EmailProviderName;
+
+    // Peek at state to recover provider (Google/Microsoft don't echo it back)
+    if (!resolvedProvider && state) {
+      try {
+        const dotIndex = state.lastIndexOf('.');
+        const dataPart = dotIndex !== -1 ? state.slice(0, dotIndex) : state;
+        const decoded = JSON.parse(Buffer.from(dataPart, 'base64url').toString('utf-8')) as {
+          provider: EmailProviderName;
+        };
+        resolvedProvider = decoded.provider;
+      } catch {
+        // will fail in handleCallback with a clear error
+      }
+    }
 
     try {
       await this.emailOAuthService.handleCallback(provider, code, state);
       success = true;
     } catch (err) {
-      // Return generic error to client — no internal details
       errorMsg = 'OAuth connection failed. Please try again.';
     }
 
-    // Use window.opener.location.origin as the postMessage target — this is
-    // evaluated in the browser (popup context) so it always refers to the
-    // actual frontend origin, regardless of how ALLOWED_ORIGINS is configured.
-    // This is safe: we are posting TO the opener (our own frontend), not
-    // accepting messages from arbitrary origins.
+    // Provider-specific labels and postMessage types
+    const isOutlook = resolvedProvider === 'outlook';
+    const providerLabel = isOutlook ? 'Outlook' : 'Gmail';
+    const msgType = isOutlook ? 'ATOM_OUTLOOK_CONNECTED' : 'ATOM_GMAIL_CONNECTED';
+
+    // Use window.opener.location.origin as the postMessage target — evaluated in
+    // the browser popup so it always refers to the actual frontend origin.
     const html = success
       ? `<!DOCTYPE html><html><head><title>Connected</title></head><body>
            <p style="font-family:sans-serif;padding:2rem;">
-             Gmail connected! You can close this window.
+             ✅ ${providerLabel} connected! You can close this window.
            </p>
            <script>
              if (window.opener) {
                try {
                  window.opener.postMessage(
-                   { type: 'ATOM_GMAIL_CONNECTED', success: true },
+                   { type: ${JSON.stringify(msgType)}, success: true },
                    window.opener.location.origin
                  );
-               } catch(e) {
-                 // Cross-origin check failed; opener already navigated away — safe to ignore
-               }
+               } catch(e) {}
                setTimeout(() => window.close(), 1500);
              }
            </script>
@@ -86,7 +102,7 @@ export class EmailOAuthController {
              if (window.opener) {
                try {
                  window.opener.postMessage(
-                   { type: 'ATOM_GMAIL_CONNECTED', success: false, error: ${JSON.stringify(errorMsg)} },
+                   { type: ${JSON.stringify(msgType)}, success: false, error: ${JSON.stringify(errorMsg)} },
                    window.opener.location.origin
                  );
                } catch(e) {}
@@ -97,7 +113,7 @@ export class EmailOAuthController {
     return res.status(HttpStatus.OK).send(html);
   }
 
-  /** Connection status. userId resolved server-side only. */
+  /** Generic connection status for any provider. userId resolved server-side only. */
   @Get('status')
   async getStatus(
     @Req() req: any,
@@ -123,14 +139,35 @@ export class EmailOAuthController {
     return {
       ...status,
       oauthConfigured,
-      connectUrl: null,  // frontend fetches /email/oauth/url for the real URL
+      connectUrl: null,
+      setupRequired: !oauthConfigured,
+    };
+  }
+
+  /**
+   * Enriched Outlook/Microsoft status for the settings panel.
+   * userId resolved server-side only.
+   */
+  @Get('outlook-status')
+  async getOutlookStatus(@Req() req: any) {
+    const userId: string = req.atomUserId;
+    const status = await this.emailOAuthService.getConnectionStatus('outlook', userId);
+    const oauthConfigured = !!(
+      this.config.get('MICROSOFT_CLIENT_ID') &&
+      this.config.get('MICROSOFT_CLIENT_SECRET')
+    );
+
+    return {
+      ...status,
+      oauthConfigured,
+      connectUrl: null,
       setupRequired: !oauthConfigured,
     };
   }
 
   /**
    * Disconnect a stored OAuth connection. userId resolved server-side only.
-   * DELETE /email/oauth/disconnect?provider=gmail
+   * DELETE /email/oauth/disconnect?provider=gmail|outlook
    */
   @Delete('disconnect')
   async disconnect(
