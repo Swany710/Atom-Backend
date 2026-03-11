@@ -9,9 +9,9 @@ import { EmailProviderName } from './email.types';
 /**
  * OAuth flow endpoints for email providers.
  *
- * Only /callback is @Public() — Google/Microsoft redirects here without our auth header.
- * All other endpoints require Authorization: Bearer <API_KEY> via the global guard.
- * userId is always resolved server-side from req.atomUserId, never from query params.
+ * ALL endpoints are @Public() — the static frontend sends no Authorization header.
+ * userId is resolved server-side: req.atomUserId (set by ApiKeyGuard when a JWT/API-key
+ * IS present) falls back to OWNER_USER_ID env var, then 'owner'.
  */
 @Controller('email/oauth')
 export class EmailOAuthController {
@@ -22,14 +22,23 @@ export class EmailOAuthController {
     private readonly config: ConfigService,
   ) {}
 
+  /** Resolve the caller's userId without requiring an auth header. */
+  private userId(req: any): string {
+    return (
+      req.atomUserId ??
+      this.config.get<string>('OWNER_USER_ID') ??
+      'owner'
+    );
+  }
+
   /** Generate an authorization URL for any supported provider. userId resolved server-side only. */
+  @Public()
   @Get('url')
   getAuthUrl(
     @Req() req: any,
     @Query('provider') provider: EmailProviderName,
   ) {
-    const userId: string = req.atomUserId;
-    return this.emailOAuthService.getAuthUrl(provider, userId);
+    return this.emailOAuthService.getAuthUrl(provider, this.userId(req));
   }
 
   /**
@@ -114,22 +123,23 @@ export class EmailOAuthController {
   }
 
   /** Generic connection status for any provider. userId resolved server-side only. */
+  @Public()
   @Get('status')
   async getStatus(
     @Req() req: any,
     @Query('provider') provider: EmailProviderName,
   ) {
-    const userId: string = req.atomUserId;
-    return this.emailOAuthService.getConnectionStatus(provider, userId);
+    return this.emailOAuthService.getConnectionStatus(provider, this.userId(req));
   }
 
   /**
    * Enriched Gmail status for the settings panel.
    * userId resolved server-side only.
    */
+  @Public()
   @Get('gmail-status')
   async getGmailStatus(@Req() req: any) {
-    const userId: string = req.atomUserId;
+    const userId: string = this.userId(req);
     const status = await this.gmailService.getConnectionStatus(userId);
     const oauthConfigured = !!(
       this.config.get('GOOGLE_CLIENT_ID') &&
@@ -148,9 +158,10 @@ export class EmailOAuthController {
    * Enriched Outlook/Microsoft status for the settings panel.
    * userId resolved server-side only.
    */
+  @Public()
   @Get('outlook-status')
   async getOutlookStatus(@Req() req: any) {
-    const userId: string = req.atomUserId;
+    const userId: string = this.userId(req);
     const status = await this.emailOAuthService.getConnectionStatus('outlook', userId);
     const oauthConfigured = !!(
       this.config.get('MICROSOFT_CLIENT_ID') &&
@@ -169,12 +180,13 @@ export class EmailOAuthController {
    * Disconnect a stored OAuth connection. userId resolved server-side only.
    * DELETE /email/oauth/disconnect?provider=gmail|outlook
    */
+  @Public()
   @Delete('disconnect')
   async disconnect(
     @Req() req: any,
     @Query('provider') provider: string,
   ) {
-    const userId: string = req.atomUserId;
+    const userId: string = this.userId(req);
     try {
       await this.emailOAuthService.disconnectProvider(provider as EmailProviderName, userId);
       return { success: true, message: `${provider} disconnected.` };

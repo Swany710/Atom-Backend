@@ -51,15 +51,29 @@ interface MulterFile {
 // ── Controller ─────────────────────────────────────────────────────────────
 
 /**
- * Canonical AI endpoints:
+ * Canonical AI endpoints — all @Public() so the static frontend can reach them
+ * without an Authorization header.  userId is resolved server-side:
+ *   req.atomUserId (set by ApiKeyGuard when auth IS present)
+ *   ?? OWNER_USER_ID env var
+ *   ?? 'owner'
  *
- *   GET  /api/v1/ai/health          – liveness probe (public, no auth)
+ *   GET  /api/v1/ai/health          – liveness probe
  *   POST /api/v1/ai/text            – text in → text out
  *   POST /api/v1/ai/voice           – audio file in → JSON or audio/mpeg out
+ *   POST /api/v1/ai/speak           – text in → audio/mpeg out
  */
 @Controller('api/v1/ai')
 export class AIVoiceController {
   constructor(private readonly aiVoiceService: AIVoiceService) {}
+
+  /** Resolve userId without requiring an Authorization header. */
+  private userId(req: any): string {
+    return (
+      req.atomUserId ??
+      process.env.OWNER_USER_ID ??
+      'owner'
+    );
+  }
 
   // ── Health (public — used by load-balancers and the test client) ─────────
   @Public()
@@ -78,14 +92,15 @@ export class AIVoiceController {
    * Body: { message, conversationId? }
    * Returns: { message, conversationId, timestamp }
    */
+  @Public()
   @Post('text')
   async handleText(@Body() body: TextRequest, @Req() req: any): Promise<TextResponse> {
     if (!body?.message?.trim()) {
       throw new BadRequestException('message is required');
     }
 
-    // userId comes from the guard-injected atomUserId, never from the request body
-    const userId: string = req.atomUserId;
+    // userId comes from the guard-injected atomUserId; falls back to OWNER_USER_ID
+    const userId: string = this.userId(req);
 
     try {
       const result = await this.aiVoiceService.processTextCommand(
@@ -122,6 +137,7 @@ export class AIVoiceController {
    * Response headers always include X-Transcription, X-Response-Text, X-Conversation-Id.
    * userId is always taken from the guard-injected req.atomUserId (never trusted from client).
    */
+  @Public()
   @Post('voice')
   @UseInterceptors(FileInterceptor('audio'))
   async handleVoice(
@@ -132,8 +148,8 @@ export class AIVoiceController {
     @Query('conversationId') queryConversationId?: string,
     @Query('returnAudio') returnAudio = 'false',
   ): Promise<void> {
-    // userId comes from the guard-injected atomUserId, never from client input
-    const userId: string = req.atomUserId;
+    // userId comes from the guard-injected atomUserId; falls back to OWNER_USER_ID
+    const userId: string = this.userId(req);
     const conversationId = bodyConversationId ?? queryConversationId;
 
     if (!file) {
@@ -187,6 +203,7 @@ export class AIVoiceController {
   // ── POST /ai/speak  ─────────────────────────────────────────────────────
   // Converts text to speech and returns audio/mpeg binary.
   // Body: { text: string, voice?: string }
+  @Public()
   @Post('speak')
   async speak(
     @Body('text') text: string,
