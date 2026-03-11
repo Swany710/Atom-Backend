@@ -3,6 +3,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { JwtModule } from '@nestjs/jwt';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AIVoiceModule } from './ai/ai-voice.module';
@@ -14,6 +15,8 @@ import { KnowledgeBaseModule } from './knowledge-base/knowledge-base.module';
 import { ApiKeyGuard } from './guards/api-key.guard';
 import { HealthModule } from './health/health.module';
 import { AuditModule } from './audit/audit.module';
+import { AuthModule } from './auth/auth.module';
+import { PendingActionModule } from './pending-actions/pending-action.module';
 import { CorrelationMiddleware } from './middleware/correlation.middleware';
 
 const isProd = process.env.NODE_ENV === 'production';
@@ -58,8 +61,17 @@ const isProd = process.env.NODE_ENV === 'production';
       },
     ]),
     TypeOrmModule.forFeature([ChatMemory]),
+    // JwtModule at root level so ApiKeyGuard (APP_GUARD) can inject JwtService
+    JwtModule.registerAsync({
+      useFactory: () => ({
+        secret: process.env.JWT_SECRET ?? 'dev-jwt-secret-UNSAFE',
+        signOptions: { expiresIn: (process.env.JWT_EXPIRES_IN ?? '7d') as any },
+      }),
+    }),
     HealthModule,
     AuditModule,
+    AuthModule,
+    PendingActionModule,
     AIVoiceModule,
     EmailModule,
     CalendarModule,

@@ -11,6 +11,7 @@ const REQUIRED_PROD_VARS: string[] = [
   'DATABASE_URL',
   'TOKEN_ENCRYPTION_KEY',
   'OAUTH_STATE_SECRET',
+  'JWT_SECRET',
   'GOOGLE_CLIENT_ID',
   'GOOGLE_CLIENT_SECRET',
   'GOOGLE_REDIRECT_URI',
@@ -67,6 +68,12 @@ export function validateProductionEnv(): void {
   // Validate ALLOWED_ORIGINS: no wildcard in production
   if (process.env.ALLOWED_ORIGINS!.trim() === '*') {
     console.error('FATAL: ALLOWED_ORIGINS cannot be "*" in production.');
+    process.exit(1);
+  }
+
+  // Validate JWT_SECRET: minimum 32 chars
+  if ((process.env.JWT_SECRET!).length < 32) {
+    console.error('FATAL: JWT_SECRET must be at least 32 characters for security.');
     process.exit(1);
   }
 

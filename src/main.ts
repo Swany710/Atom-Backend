@@ -1,23 +1,48 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { validateProductionEnv } from './config/env.validation';
+import { GlobalExceptionFilter } from './filters/global-exception.filter';
 
 // ── Run before anything else ──────────────────────────────────────────────
 // Exits the process immediately if required production env vars are missing.
 validateProductionEnv();
 
-// ── Global safety net ──────────────────────────────────────────────────────
-// Prevent unhandled promise rejections (e.g. a tool call throwing) from
-// crashing the entire process and forcing a Railway restart.
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('⚠️  Unhandled promise rejection (process kept alive):', reason, promise);
+// ── Fatal signal handlers ──────────────────────────────────────────────────
+// Log context then exit intentionally so Railway can restart cleanly.
+// A zombie process that silently swallows errors is far more dangerous
+// than a clean restart.
+process.on('unhandledRejection', (reason: unknown) => {
+  console.error(
+    JSON.stringify({
+      level: 'FATAL',
+      event: 'unhandledRejection',
+      reason: reason instanceof Error
+        ? { message: reason.message, stack: reason.stack }
+        : String(reason),
+      timestamp: new Date().toISOString(),
+    }),
+  );
+  process.exit(1);
 });
-process.on('uncaughtException', (err) => {
-  console.error('⚠️  Uncaught exception (process kept alive):', err);
+
+process.on('uncaughtException', (err: Error) => {
+  console.error(
+    JSON.stringify({
+      level: 'FATAL',
+      event: 'uncaughtException',
+      reason: { message: err.message, stack: err.stack },
+      timestamp: new Date().toISOString(),
+    }),
+  );
+  process.exit(1);
 });
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+
+  // ── Global exception filter ──────────────────────────────────────────────
+  // Must be registered before guards/interceptors so it catches everything.
+  app.useGlobalFilters(new GlobalExceptionFilter());
 
   const isProd = process.env.NODE_ENV === 'production';
 
