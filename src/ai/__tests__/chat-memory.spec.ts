@@ -1,36 +1,35 @@
 /**
- * Chat-memory persistence tests
+ * Conversation-memory persistence tests
  *
- * Verifies that AIVoiceService correctly saves user + assistant messages
- * to the ChatMemory repository after every processTextCommand and
- * processVoiceCommand call.
+ * Verifies that AIVoiceService correctly delegates memory persistence to
+ * ConversationMemoryService (appendPair) after every processTextCommand
+ * and processVoiceCommand call.
+ *
+ * Updated to reflect the four-service split:
+ *   ClaudeTaskOrchestratorService  — reasoning engine (mocked)
+ *   OpenAiVoiceGatewayService      — audio I/O       (mocked)
+ *   ConversationMemoryService      — persistence      (mocked — this is what we verify)
  */
 
 import { AIVoiceService } from '../ai-voice.service';
-import { ConversationOrchestratorService } from '../conversation-orchestrator.service';
-import { VoicePipelineService } from '../voice-pipeline.service';
-import { Repository } from 'typeorm';
-import { ChatMemory } from '../chat-memory.entity';
+import { ClaudeTaskOrchestratorService } from '../claude-task-orchestrator.service';
+import { OpenAiVoiceGatewayService } from '../openai-voice-gateway.service';
+import { ConversationMemoryService } from '../conversation-memory.service';
 
-// ── helpers ───────────────────────────────────────────────────────────────────
+// ── Mock factories ────────────────────────────────────────────────────────────
 
-function makeRepoMock(): jest.Mocked<Pick<Repository<ChatMemory>, 'save'>> {
-  return { save: jest.fn().mockResolvedValue(undefined) };
-}
-
-function makeOrchestratorMock(reply = 'AI reply'): jest.Mocked<Pick<ConversationOrchestratorService, 'runChat'>> {
+function makeOrchestratorMock(
+  reply = 'AI reply',
+): jest.Mocked<Pick<ClaudeTaskOrchestratorService, 'runChat'>> {
   return {
-    runChat: jest.fn().mockResolvedValue({
-      response:  reply,
-      toolCalls: [],
-    }),
+    runChat: jest.fn().mockResolvedValue({ response: reply, toolCalls: [] }),
   };
 }
 
-function makePipelineMock(
+function makeVoiceGatewayMock(
   transcription = 'Transcribed speech',
   audioBuffer?: Buffer,
-): jest.Mocked<Pick<VoicePipelineService, 'transcribe' | 'synthesise' | 'generateSpeech'>> {
+): jest.Mocked<Pick<OpenAiVoiceGatewayService, 'transcribe' | 'synthesise' | 'generateSpeech'>> {
   return {
     transcribe:     jest.fn().mockResolvedValue(transcription),
     synthesise:     jest.fn().mockResolvedValue(audioBuffer ?? undefined),
@@ -38,59 +37,55 @@ function makePipelineMock(
   };
 }
 
+function makeMemoryMock(): jest.Mocked<Pick<ConversationMemoryService, 'appendPair' | 'appendSingle'>> {
+  return {
+    appendPair:   jest.fn().mockResolvedValue(undefined),
+    appendSingle: jest.fn().mockResolvedValue(undefined),
+  };
+}
+
 function buildService(
-  repo       = makeRepoMock(),
   orchestrator = makeOrchestratorMock(),
-  pipeline   = makePipelineMock(),
+  voiceGateway = makeVoiceGatewayMock(),
+  memory       = makeMemoryMock(),
 ): AIVoiceService {
   return new AIVoiceService(
-    repo as unknown as Repository<ChatMemory>,
-    orchestrator as unknown as ConversationOrchestratorService,
-    pipeline as unknown as VoicePipelineService,
+    orchestrator as unknown as ClaudeTaskOrchestratorService,
+    voiceGateway as unknown as OpenAiVoiceGatewayService,
+    memory       as unknown as ConversationMemoryService,
   );
 }
 
-// ── tests ─────────────────────────────────────────────────────────────────────
+// ── Tests ─────────────────────────────────────────────────────────────────────
 
-describe('AIVoiceService — chat-memory persistence', () => {
+describe('AIVoiceService — conversation-memory persistence', () => {
 
   // ── processTextCommand ────────────────────────────────────────────────────
 
   describe('processTextCommand', () => {
-    it('saves user message and assistant reply to the repo', async () => {
-      const repo         = makeRepoMock();
+    it('calls memory.appendPair with user message and assistant reply', async () => {
       const orchestrator = makeOrchestratorMock('Hello from Claude');
-      const svc          = buildService(repo, orchestrator);
+      const memory       = makeMemoryMock();
+      const svc          = buildService(orchestrator, makeVoiceGatewayMock(), memory);
 
       await svc.processTextCommand('Hello', 'user-1');
 
-      expect(repo.save).toHaveBeenCalledTimes(1);
-      const saved = repo.save.mock.calls[0][0] as unknown as any[];
-      expect(saved).toHaveLength(2);
-      expect(saved[0]).toMatchObject({ role: 'user', content: 'Hello' });
-      expect(saved[1]).toMatchObject({ role: 'assistant', content: 'Hello from Claude' });
+      expect(memory.appendPair).toHaveBeenCalledTimes(1);
+      expect(memory.appendPair).toHaveBeenCalledWith('user-1', 'Hello', 'Hello from Claude');
     });
 
     it('uses userId as sessionId when no conversationId is provided', async () => {
-      const repo = makeRepoMock();
-      const svc  = buildService(repo);
-
+      const memory = makeMemoryMock();
+      const svc    = buildService(undefined, undefined, memory);
       await svc.processTextCommand('Hello', 'user-42');
-
-      const saved = repo.save.mock.calls[0][0] as unknown as any[];
-      expect(saved[0].sessionId).toBe('user-42');
-      expect(saved[1].sessionId).toBe('user-42');
+      expect(memory.appendPair).toHaveBeenCalledWith('user-42', 'Hello', 'AI reply');
     });
 
     it('uses the provided conversationId as sessionId', async () => {
-      const repo = makeRepoMock();
-      const svc  = buildService(repo);
-
+      const memory = makeMemoryMock();
+      const svc    = buildService(undefined, undefined, memory);
       await svc.processTextCommand('Hi', 'user-42', 'conv-xyz');
-
-      const saved = repo.save.mock.calls[0][0] as unknown as any[];
-      expect(saved[0].sessionId).toBe('conv-xyz');
-      expect(saved[1].sessionId).toBe('conv-xyz');
+      expect(memory.appendPair).toHaveBeenCalledWith('conv-xyz', 'Hi', 'AI reply');
     });
 
     it('returns the conversationId from the session', async () => {
@@ -101,30 +96,26 @@ describe('AIVoiceService — chat-memory persistence', () => {
 
     it('returns the AI reply as response', async () => {
       const orchestrator = makeOrchestratorMock('The answer is 42');
-      const svc          = buildService(makeRepoMock(), orchestrator);
-
-      const result = await svc.processTextCommand('What is the answer?', 'user-1');
+      const svc          = buildService(orchestrator);
+      const result       = await svc.processTextCommand('What is the answer?', 'user-1');
       expect(result.response).toBe('The answer is 42');
     });
 
-    it('saves even when tool calls are present', async () => {
-      const orchestrator = {
+    it('persists messages even when tool calls are present', async () => {
+      const orchestrator: any = {
         runChat: jest.fn().mockResolvedValue({
-          response:  'Done',
-          toolCalls: [{ tool: 'send_email', args: {}, result: 'ok' }],
+          response: 'Done', toolCalls: [{ tool: 'send_email', args: {}, result: 'ok' }],
         }),
       };
-      const repo = makeRepoMock();
-      const svc  = buildService(repo, orchestrator as any);
-
+      const memory = makeMemoryMock();
+      const svc    = buildService(orchestrator, undefined, memory);
       const result = await svc.processTextCommand('Send email', 'user-1');
-      expect(repo.save).toHaveBeenCalledTimes(1);
+      expect(memory.appendPair).toHaveBeenCalledTimes(1);
       expect(result.toolCalls).toHaveLength(1);
     });
 
     it('does NOT include toolCalls in result when none are returned', async () => {
-      const svc    = buildService();
-      const result = await svc.processTextCommand('Hello', 'user-1');
+      const result = await buildService().processTextCommand('Hello', 'user-1');
       expect(result.toolCalls).toBeUndefined();
     });
   });
@@ -134,88 +125,64 @@ describe('AIVoiceService — chat-memory persistence', () => {
   describe('processVoiceCommand', () => {
     const audioBuffer = Buffer.alloc(5_000);
 
-    it('saves transcription (as user) and assistant reply to the repo', async () => {
-      const repo         = makeRepoMock();
+    it('calls memory.appendPair with transcription and assistant reply', async () => {
       const orchestrator = makeOrchestratorMock('Voice reply');
-      const pipeline     = makePipelineMock('Voice transcription');
-      const svc          = buildService(repo, orchestrator, pipeline);
+      const voiceGateway = makeVoiceGatewayMock('Voice transcription');
+      const memory       = makeMemoryMock();
+      const svc          = buildService(orchestrator, voiceGateway, memory);
 
       await svc.processVoiceCommand(audioBuffer, 'user-1');
 
-      expect(repo.save).toHaveBeenCalledTimes(1);
-      const saved = repo.save.mock.calls[0][0] as unknown as any[];
-      expect(saved).toHaveLength(2);
-      expect(saved[0]).toMatchObject({ role: 'user',      content: 'Voice transcription' });
-      expect(saved[1]).toMatchObject({ role: 'assistant', content: 'Voice reply' });
+      expect(memory.appendPair).toHaveBeenCalledTimes(1);
+      expect(memory.appendPair).toHaveBeenCalledWith(
+        'user-1', 'Voice transcription', 'Voice reply',
+      );
     });
 
     it('uses userId as sessionId when no conversationId is provided', async () => {
-      const repo = makeRepoMock();
-      const svc  = buildService(repo);
-
-      await svc.processVoiceCommand(audioBuffer, 'voice-user-99');
-
-      const saved = repo.save.mock.calls[0][0] as unknown as any[];
-      expect(saved[0].sessionId).toBe('voice-user-99');
-      expect(saved[1].sessionId).toBe('voice-user-99');
+      const memory = makeMemoryMock();
+      await buildService(undefined, undefined, memory).processVoiceCommand(audioBuffer, 'voice-user-99');
+      expect(memory.appendPair).toHaveBeenCalledWith('voice-user-99', 'Transcribed speech', 'AI reply');
     });
 
     it('uses the provided conversationId as sessionId', async () => {
-      const repo = makeRepoMock();
-      const svc  = buildService(repo);
-
-      await svc.processVoiceCommand(audioBuffer, 'user-1', 'voice-conv-55');
-
-      const saved = repo.save.mock.calls[0][0] as unknown as any[];
-      expect(saved[0].sessionId).toBe('voice-conv-55');
+      const memory = makeMemoryMock();
+      await buildService(undefined, undefined, memory).processVoiceCommand(audioBuffer, 'user-1', 'voice-conv-55');
+      const [sessionId] = (memory.appendPair as jest.Mock).mock.calls[0];
+      expect(sessionId).toBe('voice-conv-55');
     });
 
     it('returns the transcription in the result', async () => {
-      const pipeline = makePipelineMock('My spoken words');
-      const svc      = buildService(makeRepoMock(), makeOrchestratorMock(), pipeline);
-
-      const result = await svc.processVoiceCommand(audioBuffer, 'user-1');
+      const voiceGateway = makeVoiceGatewayMock('My spoken words');
+      const result       = await buildService(undefined, voiceGateway).processVoiceCommand(audioBuffer, 'user-1');
       expect(result.transcription).toBe('My spoken words');
     });
 
-    it('includes audioResponse in result when TTS succeeds', async () => {
-      const audioOut = Buffer.from('mp3-output');
-      const pipeline = makePipelineMock('Text', audioOut);
-      const svc      = buildService(makeRepoMock(), makeOrchestratorMock(), pipeline);
-
-      const result = await svc.processVoiceCommand(audioBuffer, 'user-1');
+    it('includes audioResponse when TTS succeeds', async () => {
+      const audioOut     = Buffer.from('mp3-output');
+      const voiceGateway = makeVoiceGatewayMock('Text', audioOut);
+      const result       = await buildService(undefined, voiceGateway).processVoiceCommand(audioBuffer, 'user-1');
       expect(result.audioResponse).toEqual(audioOut);
     });
 
-    it('omits audioResponse when TTS returns undefined', async () => {
-      const pipeline = makePipelineMock('Text', undefined);
-      const svc      = buildService(makeRepoMock(), makeOrchestratorMock(), pipeline);
-
-      const result = await svc.processVoiceCommand(audioBuffer, 'user-1');
+    it('omits audioResponse when TTS synthesise returns undefined (soft failure)', async () => {
+      const voiceGateway = makeVoiceGatewayMock('Text', undefined);
+      const result       = await buildService(undefined, voiceGateway).processVoiceCommand(audioBuffer, 'user-1');
       expect(result.audioResponse).toBeUndefined();
     });
 
     it('calls transcribe with the provided buffer and mimeType', async () => {
-      const pipeline = makePipelineMock();
-      const svc      = buildService(makeRepoMock(), makeOrchestratorMock(), pipeline);
-
-      await svc.processVoiceCommand(audioBuffer, 'user-1', undefined, 'audio/webm');
-      expect(pipeline.transcribe).toHaveBeenCalledWith(audioBuffer, 'audio/webm');
+      const voiceGateway = makeVoiceGatewayMock();
+      await buildService(undefined, voiceGateway).processVoiceCommand(audioBuffer, 'user-1', undefined, 'audio/webm');
+      expect(voiceGateway.transcribe).toHaveBeenCalledWith(audioBuffer, 'audio/webm');
     });
 
-    it('still saves messages even when TTS synthesise throws', async () => {
-      const pipeline: any = {
-        transcribe:     jest.fn().mockResolvedValue('speech'),
-        synthesise:     jest.fn().mockRejectedValue(new Error('TTS down')),
-        generateSpeech: jest.fn(),
-      };
-      const repo = makeRepoMock();
-      const svc  = buildService(repo, makeOrchestratorMock(), pipeline);
-
-      // synthesise failure should propagate (it's not caught in AIVoiceService itself)
-      await expect(svc.processVoiceCommand(audioBuffer, 'user-1')).rejects.toThrow('TTS down');
-      // save should NOT have been called because the error was thrown before we got there
-      // This verifies the save placement is after TTS — update if implementation changes
+    it('persists messages before TTS so a soft TTS failure does not lose the record', async () => {
+      // synthesise returns undefined (gateway swallows TTS errors — never throws)
+      const voiceGateway = makeVoiceGatewayMock('speech', undefined);
+      const memory       = makeMemoryMock();
+      await buildService(undefined, voiceGateway, memory).processVoiceCommand(audioBuffer, 'user-1');
+      expect(memory.appendPair).toHaveBeenCalledTimes(1);
     });
   });
 });

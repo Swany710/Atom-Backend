@@ -1,29 +1,45 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
 import { EMAIL_PROVIDER, IEmailService } from '../integrations/email/email.provider';
 import { GmailService } from '../integrations/email/gmail.service';
 import { CalendarService } from '../integrations/calendar/calendar.service';
 import { GoogleCalendarService } from '../integrations/calendar/google-calendar.service';
 import { AccuLynxService } from '../integrations/crm/acculynx.service';
 import { KnowledgeBaseService } from '../knowledge-base/knowledge-base.service';
-import { ChatMemory } from './chat-memory.entity';
 import { ToolDefinitionsService } from './tool-definitions.service';
 import { PendingActionService, ConfirmationRequired } from '../pending-actions/pending-action.service';
 import { AuditService } from '../audit/audit.service';
 import { providerRead, providerWrite } from '../utils/provider-call';
 
 /**
- * ToolExecutorService
+ * ToolExecutionService
  *
- * Routes tool calls to the correct provider service.
- * Enforces the pending-action confirmation gate for every write tool.
- * Records audit entries for every write that executes.
- * Wraps every external call with providerRead / providerWrite for timeout safety.
+ * Execution layer between Claude's tool-use decisions and the actual
+ * provider integrations (Gmail, Google Calendar, AccuLynx, Knowledge Base).
+ *
+ * Responsibilities:
+ *   - Route tool calls to the correct provider service
+ *   - Enforce the pending-action confirmation gate for every WRITE tool
+ *   - Record audit entries for every executed write
+ *   - Wrap every external call with providerRead / providerWrite for
+ *     consistent timeout + retry behaviour
+ *
+ * What this service does NOT do:
+ *   - Call Claude / Anthropic  →  ClaudeTaskOrchestratorService
+ *   - Manage voice or audio    →  OpenAiVoiceGatewayService
+ *   - Persist conversation     →  ConversationMemoryService
+ *
+ * Write-confirmation flow:
+ *   1. Claude calls a write tool WITHOUT pendingActionId.
+ *   2. This service calls PendingActionService.create() and returns
+ *      { requiresConfirmation: true, pendingActionId, summary, expiresAt }.
+ *   3. ClaudeTaskOrchestratorService feeds that back to Claude as a tool_result.
+ *   4. Claude shows the summary to the user and waits.
+ *   5. User confirms.  Claude calls the same tool WITH pendingActionId.
+ *   6. This service validates + claims the pending action and executes for real.
  */
 @Injectable()
-export class ToolExecutorService {
-  private readonly logger = new Logger(ToolExecutorService.name);
+export class ToolExecutionService {
+  private readonly logger = new Logger(ToolExecutionService.name);
 
   constructor(
     private readonly gmailService: GmailService,
@@ -34,21 +50,15 @@ export class ToolExecutorService {
     private readonly toolDefs: ToolDefinitionsService,
     private readonly pendingActions: PendingActionService,
     private readonly audit: AuditService,
-    @InjectRepository(ChatMemory)
-    private readonly chatRepo: Repository<ChatMemory>,
     @Inject(EMAIL_PROVIDER)
     private readonly emailService: IEmailService,
   ) {}
 
+  // ── Public dispatch ───────────────────────────────────────────────────────
+
   /**
-   * Main dispatch entry point called by ConversationOrchestratorService.
-   *
-   * For WRITE tools:
-   *   If args.pendingActionId is absent → create pending action, return ConfirmationRequired.
-   *   If args.pendingActionId is present → validate it, execute, audit.
-   *
-   * For READ tools:
-   *   Execute immediately with timeout, no confirmation needed.
+   * Main entry point called by ClaudeTaskOrchestratorService.
+   * Routes to the write or read path based on ToolDefinitionsService.isWriteTool().
    */
   async execute(
     toolName: string,
@@ -75,7 +85,7 @@ export class ToolExecutorService {
     const pendingActionId = args.pendingActionId as string | undefined;
 
     if (!pendingActionId) {
-      // No confirmation yet — create a pending action and return gate response
+      // No confirmation token yet — create a pending action record and ask
       const summary = this.buildSummary(toolName, args);
       return this.pendingActions.create({
         userId,
@@ -87,20 +97,19 @@ export class ToolExecutorService {
       });
     }
 
-    // Has pendingActionId — validate and claim it
+    // Confirmation token present — validate and claim it atomically
     const claimResult = await this.pendingActions.claim(pendingActionId, userId);
     if (claimResult.ok === false) {
-      const err = claimResult;
       return {
-        error: err.message,
-        reason: err.reason,
+        error:  claimResult.message,
+        reason: claimResult.reason,
       } satisfies Record<string, unknown>;
     }
 
-    // Use args from the confirmed pending action record (not re-trusted from AI)
+    // Execute using the args from the confirmed pending action record
+    // (not the AI-supplied args) to prevent prompt-injection tampering.
     const confirmedArgs = claimResult.action.args;
 
-    // Execute the provider write with timeout
     let result: unknown;
     try {
       result = await this.dispatchWrite(toolName, confirmedArgs, userId, sessionId);
@@ -238,7 +247,11 @@ export class ToolExecutorService {
     switch (toolName) {
       case 'search_knowledge_base':
         return providerRead(
-          () => this.searchKnowledgeBase(args.query as string, args.filter as string | undefined, sessionId),
+          () => this.searchKnowledgeBase(
+            args.query as string,
+            args.filter as string | undefined,
+            sessionId,
+          ),
           'knowledge_base.search',
         );
 
@@ -255,7 +268,11 @@ export class ToolExecutorService {
 
       case 'search_emails':
         return providerRead(
-          () => this.gmailService.searchEmails(args.query as string, (args.maxResults as number) ?? 20, userId),
+          () => this.gmailService.searchEmails(
+            args.query as string,
+            (args.maxResults as number) ?? 20,
+            userId,
+          ),
           'gmail.searchEmails',
         );
 
@@ -272,12 +289,19 @@ export class ToolExecutorService {
         );
 
       case 'list_email_labels':
-        return providerRead(() => this.gmailService.listLabels(userId), 'gmail.listLabels');
+        return providerRead(
+          () => this.gmailService.listLabels(userId),
+          'gmail.listLabels',
+        );
 
       case 'mark_email_read':
-        // mark_email_read is technically a write but low-risk, keep in read path
+        // Low-risk write — kept in read path (no confirmation gate)
         return providerWrite(
-          () => this.gmailService.markRead(args.messageId as string, args.read as boolean, userId),
+          () => this.gmailService.markRead(
+            args.messageId as string,
+            args.read as boolean,
+            userId,
+          ),
           'gmail.markRead',
         );
 
@@ -294,7 +318,11 @@ export class ToolExecutorService {
 
       case 'search_calendar':
         return providerRead(
-          () => this.googleCalendar.searchEvents(userId, args.query as string, (args.maxResults as number) ?? 20),
+          () => this.googleCalendar.searchEvents(
+            userId,
+            args.query as string,
+            (args.maxResults as number) ?? 20,
+          ),
           'calendar.searchEvents',
         );
 
@@ -327,7 +355,7 @@ export class ToolExecutorService {
 
       case 'get_general_info':
         return {
-          info: 'No additional information needed. Answer based on general knowledge.',
+          info:  'No additional information needed. Answer based on general knowledge.',
           query: args.query,
         };
 
@@ -337,7 +365,7 @@ export class ToolExecutorService {
     }
   }
 
-  // ── Helpers ───────────────────────────────────────────────────────────────
+  // ── Private helpers ───────────────────────────────────────────────────────
 
   private async searchKnowledgeBase(
     query: string,
@@ -346,9 +374,11 @@ export class ToolExecutorService {
   ): Promise<unknown> {
     this.logger.log(`Searching knowledge base: "${query}" filter=${filter}`);
     const results = await this.knowledgeBase.search(query, 5);
+
     if (!results.length) {
       return { results: [], message: 'No matching knowledge base entries found.', query };
     }
+
     return {
       results: results.map(r => ({
         id:         r.id,
@@ -374,15 +404,21 @@ export class ToolExecutorService {
       const status = await this.googleCalendar.getConnectionStatus(userId);
       if (status.connected) {
         const days = endDate
-          ? Math.ceil((new Date(endDate).getTime() - new Date(startDate).getTime()) / 86_400_000)
+          ? Math.ceil(
+              (new Date(endDate).getTime() - new Date(startDate).getTime()) / 86_400_000,
+            )
           : 1;
         return this.googleCalendar.getUpcomingEvents(userId, Math.max(days, 1));
       }
-    } catch { /* fall through */ }
+    } catch { /* fall through to CalendarService */ }
+
     return this.calendarService.checkCalendar(startDate, endDate, searchQuery, sessionId);
   }
 
-  private async createCalendarEvent(args: Record<string, unknown>, sessionId?: string): Promise<unknown> {
+  private async createCalendarEvent(
+    args: Record<string, unknown>,
+    sessionId?: string,
+  ): Promise<unknown> {
     try {
       const userId = sessionId ?? '';
       const status = await this.googleCalendar.getConnectionStatus(userId);
@@ -397,7 +433,8 @@ export class ToolExecutorService {
           args.attendees as string[],
         );
       }
-    } catch { /* fall through */ }
+    } catch { /* fall through to CalendarService */ }
+
     return this.calendarService.createCalendarEvent(
       args.title as string,
       args.start_time as string,
@@ -434,7 +471,9 @@ export class ToolExecutorService {
     }
   }
 
-  private toolToAuditAction(toolName: string): import('../audit/audit.service').AuditAction {
+  private toolToAuditAction(
+    toolName: string,
+  ): import('../audit/audit.service').AuditAction {
     const map: Record<string, import('../audit/audit.service').AuditAction> = {
       send_email:             'email_send',
       reply_email:            'email_reply',
@@ -450,15 +489,19 @@ export class ToolExecutorService {
   }
 
   private toolToSystem(toolName: string): string {
-    if (toolName.startsWith('send_email') || toolName.includes('email')) return 'gmail';
-    if (toolName.includes('calendar')) return 'google_calendar';
-    if (toolName.startsWith('crm')) return 'acculynx';
+    if (toolName.includes('email'))                       return 'gmail';
+    if (toolName.includes('calendar'))                    return 'google_calendar';
+    if (toolName.startsWith('crm'))                       return 'acculynx';
+    if (toolName === 'search_knowledge_base')             return 'knowledge_base';
     return 'unknown';
   }
 
-  /** Strip any secret-ish fields before storing in audit logs */
+  /** Strip secrets before storing in audit logs */
   private sanitiseArgs(args: Record<string, unknown>): Record<string, unknown> {
-    const { password, token, accessToken, refreshToken, pendingActionId, ...safe } = args as any;
+    const {
+      password, token, accessToken, refreshToken, pendingActionId,
+      ...safe
+    } = args as any;
     return safe;
   }
 }

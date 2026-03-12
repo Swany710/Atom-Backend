@@ -1,9 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { ChatMemory } from './chat-memory.entity';
-import { ConversationOrchestratorService } from './conversation-orchestrator.service';
-import { VoicePipelineService } from './voice-pipeline.service';
+import { ClaudeTaskOrchestratorService } from './claude-task-orchestrator.service';
+import { OpenAiVoiceGatewayService } from './openai-voice-gateway.service';
+import { ConversationMemoryService } from './conversation-memory.service';
 
 export interface ProcessResult {
   response: string;
@@ -16,29 +14,52 @@ export interface ProcessResult {
 /**
  * AIVoiceService — public facade consumed by AIVoiceController.
  *
- * Controller endpoints remain unchanged.  Internal implementation is
- * split across focused services:
+ * All public endpoints are kept UNCHANGED.  Internal implementation is
+ * split across four focused services:
  *
- *   ConversationOrchestratorService — Claude API + tool-use loop
- *   ToolDefinitionsService          — Anthropic tool schemas
- *   ToolExecutorService             — provider dispatch + pending-action gate + audit
- *   VoicePipelineService            — Whisper STT + OpenAI TTS
- *   PendingActionService            — confirmation records
- *   AuditService                    — write audit log
+ *   ClaudeTaskOrchestratorService   — Claude API + tool-use loop
+ *                                     (sole reasoning / decision engine)
+ *   OpenAiVoiceGatewayService       — OpenAI Whisper STT + OpenAI TTS
+ *                                     (audio I/O only — no decisions)
+ *   ToolExecutionService            — provider dispatch, pending-action gate,
+ *                                     audit logging  (injected by orchestrator)
+ *   ConversationMemoryService       — ChatMemory persistence + history loading
+ *
+ * ┌─────────────────────────────────────────────────────┐
+ * │  Text pipeline                                      │
+ * │    user text  →  Claude  →  text reply              │
+ * │                  (tools via ToolExecutionService)   │
+ * │                  memory via ConversationMemory      │
+ * └─────────────────────────────────────────────────────┘
+ *
+ * ┌─────────────────────────────────────────────────────┐
+ * │  Voice pipeline                                     │
+ * │    audio  →  OpenAI Whisper (STT)                   │
+ * │           →  Claude  (reasoning + tools)            │
+ * │           →  OpenAI TTS  →  audio/mpeg reply        │
+ * └─────────────────────────────────────────────────────┘
  */
 @Injectable()
 export class AIVoiceService {
   private readonly logger = new Logger(AIVoiceService.name);
 
   constructor(
-    @InjectRepository(ChatMemory)
-    private readonly chatRepo: Repository<ChatMemory>,
-    private readonly orchestrator: ConversationOrchestratorService,
-    private readonly voicePipeline: VoicePipelineService,
+    private readonly orchestrator: ClaudeTaskOrchestratorService,
+    private readonly voiceGateway: OpenAiVoiceGatewayService,
+    private readonly memory: ConversationMemoryService,
   ) {}
 
   // ── Text pipeline ─────────────────────────────────────────────────────────
 
+  /**
+   * Process a plain-text user message.
+   * Route: user text → ClaudeTaskOrchestratorService → text reply
+   *
+   * @param message        User message text.
+   * @param userId         Authenticated user ID.
+   * @param conversationId Optional conversation thread ID (default: userId).
+   * @param correlationId  Optional tracing ID for log correlation.
+   */
   async processTextCommand(
     message: string,
     userId: string,
@@ -54,10 +75,8 @@ export class AIVoiceService {
       correlationId,
     );
 
-    await this.chatRepo.save([
-      { sessionId, role: 'user',      content: message },
-      { sessionId, role: 'assistant', content: reply },
-    ]);
+    // Persist the exchange after Claude responds
+    await this.memory.appendPair(sessionId, message, reply);
 
     return {
       response:       reply,
@@ -66,6 +85,10 @@ export class AIVoiceService {
     };
   }
 
+  /**
+   * Convenience overload used internally (e.g. by voice pipeline callers that
+   * only need the text reply string).
+   */
   async processPrompt(prompt: string, sessionId: string): Promise<string> {
     const { response } = await this.processTextCommand(prompt, sessionId, sessionId);
     return response;
@@ -73,16 +96,27 @@ export class AIVoiceService {
 
   // ── Voice pipeline ────────────────────────────────────────────────────────
 
+  /**
+   * Process a voice recording end-to-end.
+   * Route: audio → OpenAI Whisper (STT) → Claude → OpenAI TTS → audio/mpeg
+   *
+   * Audio synthesis failure is non-fatal — the text response is always returned.
+   *
+   * @param audioBuffer    Raw audio bytes (WebM / Ogg / MP3 / WAV / MP4).
+   * @param userId         Authenticated user ID.
+   * @param conversationId Optional conversation thread ID (default: userId).
+   * @param mimeType       MIME type hint for correct Whisper file extension.
+   */
   async processVoiceCommand(
     audioBuffer: Buffer,
     userId: string,
     conversationId?: string,
     mimeType?: string,
   ): Promise<ProcessResult> {
-    // 1) Transcribe
-    const transcription = await this.voicePipeline.transcribe(audioBuffer, mimeType);
+    // Step 1 — STT: audio → transcription (OpenAI Whisper)
+    const transcription = await this.voiceGateway.transcribe(audioBuffer, mimeType);
 
-    // 2) Run through Claude
+    // Step 2 — Reasoning: transcription → reply (Claude)
     const sessionId = conversationId ?? userId;
     const { response: reply, toolCalls } = await this.orchestrator.runChat(
       sessionId,
@@ -90,13 +124,12 @@ export class AIVoiceService {
       userId,
     );
 
-    await this.chatRepo.save([
-      { sessionId, role: 'user',      content: transcription },
-      { sessionId, role: 'assistant', content: reply },
-    ]);
+    // Persist the exchange
+    await this.memory.appendPair(sessionId, transcription, reply);
 
-    // 3) TTS (optional — failure does not break the response)
-    const audioResponse = await this.voicePipeline.synthesise(reply);
+    // Step 3 — TTS: reply → audio/mpeg (OpenAI TTS)
+    // Failure here is intentionally swallowed — the text response is still valid.
+    const audioResponse = await this.voiceGateway.synthesise(reply);
 
     return {
       response:       reply,
@@ -109,10 +142,14 @@ export class AIVoiceService {
 
   // ── TTS only ──────────────────────────────────────────────────────────────
 
+  /**
+   * Convert arbitrary text to speech (used by POST /ai/speak).
+   * Delegates entirely to OpenAiVoiceGatewayService — no Claude involved.
+   */
   async generateSpeech(
     text: string,
     voice: 'alloy' | 'echo' | 'fable' | 'onyx' | 'nova' | 'shimmer' = 'nova',
   ): Promise<Buffer> {
-    return this.voicePipeline.generateSpeech(text, voice);
+    return this.voiceGateway.generateSpeech(text, voice);
   }
 }
