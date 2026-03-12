@@ -15,6 +15,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AIVoiceService } from './ai/ai-voice.service';
 import { ChatMemory } from './ai/chat-memory.entity';
+import { Public } from './decorators/public.decorator';
 
 // AppController owns conversation history and multipart voice uploads.
 // Text chat and health/status live in AIVoiceController (/api/v1/ai/*).
@@ -42,6 +43,16 @@ export class AppController {
     return { message: 'Conversation cleared', conversationId: id };
   }
 
+  /**
+   * Legacy voice endpoint — kept for backwards compatibility.
+   * New code should call POST /api/v1/ai/voice (AIVoiceController).
+   *
+   * Marked @Public() so the frontend proxy can reach it without an
+   * Authorization header (the proxy injects one only when API_KEY is set).
+   * userId falls back to OWNER_USER_ID → 'owner' if the guard has not
+   * injected atomUserId (i.e. when no auth header is present).
+   */
+  @Public()
   @Post('ai/voice-command')
   @UseInterceptors(FileInterceptor('audio'))
   async handleVoice(
@@ -49,8 +60,12 @@ export class AppController {
     @Req() req: any,
     @Body() body: { conversationId?: string },
   ) {
-    // Identity always comes from the guard-injected atomUserId, not from client body
-    const userId: string = req.atomUserId;
+    // Identity comes from guard-injected atomUserId when auth IS present;
+    // falls back gracefully to OWNER_USER_ID for fully-public usage.
+    const userId: string =
+      req.atomUserId ??
+      process.env.OWNER_USER_ID ??
+      'owner';
 
     if (!file?.buffer || file.size < 1_000) {
       return {
