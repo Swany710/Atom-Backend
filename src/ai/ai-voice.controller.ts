@@ -75,6 +75,20 @@ export class AIVoiceController {
     );
   }
 
+  /**
+   * Sanitise a string for use as an HTTP header value.
+   * HTTP/1.1 allows only printable ASCII (0x20-0x7E) — no newlines, no unicode.
+   * Claude responses routinely contain both, so we strip them before calling
+   * res.setHeader() to avoid Node.js throwing "Invalid character in header content".
+   */
+  private safeHeader(value: string, maxLen = 500): string {
+    return (value ?? '')
+      .replace(/[\r\n\t]/g, ' ')       // newlines / tabs → space
+      .replace(/[^\x20-\x7E]/g, '')    // drop non-printable / non-ASCII
+      .trim()
+      .slice(0, maxLen);
+  }
+
   // ── Health (public — used by load-balancers and the test client) ─────────
   @Public()
   @Get('health')
@@ -176,9 +190,9 @@ export class AIVoiceController {
       );
 
       // Always expose metadata headers regardless of response type
-      res.setHeader('X-Transcription', result.transcription ?? '');
-      res.setHeader('X-Response-Text', result.response ?? '');
-      res.setHeader('X-Conversation-Id', result.conversationId ?? '');
+      res.setHeader('X-Transcription',  this.safeHeader(result.transcription ?? ''));
+      res.setHeader('X-Response-Text',  this.safeHeader(result.response ?? ''));
+      res.setHeader('X-Conversation-Id', this.safeHeader(result.conversationId ?? ''));
 
       if (returnAudio === 'true' && result.audioResponse) {
         res.setHeader('Content-Type', 'audio/mpeg');
