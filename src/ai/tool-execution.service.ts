@@ -178,18 +178,6 @@ export class ToolExecutionService {
           'gmail.replyToEmail',
         );
 
-      case 'delete_email':
-        return providerWrite(
-          () => this.gmailService.deleteEmail(args.messageId as string, userId),
-          'gmail.deleteEmail',
-        );
-
-      case 'archive_email':
-        return providerWrite(
-          () => this.gmailService.archiveEmail(args.messageId as string, userId),
-          'gmail.archiveEmail',
-        );
-
       case 'create_calendar_event':
         return providerWrite(
           () => this.createCalendarEvent(args, userId, sessionId),
@@ -295,7 +283,7 @@ export class ToolExecutionService {
         );
 
       case 'mark_email_read':
-        // Low-risk write — kept in read path (no confirmation gate)
+        // Low-risk write — direct execute, no confirmation gate
         return providerWrite(
           () => this.gmailService.markRead(
             args.messageId as string,
@@ -303,6 +291,20 @@ export class ToolExecutionService {
             userId,
           ),
           'gmail.markRead',
+        );
+
+      case 'delete_email':
+        // Organisational action — direct execute, no confirmation gate
+        return providerWrite(
+          () => this.gmailService.deleteEmail(args.messageId as string, userId),
+          'gmail.deleteEmail',
+        );
+
+      case 'archive_email':
+        // Organisational action — direct execute, no confirmation gate
+        return providerWrite(
+          () => this.gmailService.archiveEmail(args.messageId as string, userId),
+          'gmail.archiveEmail',
         );
 
       case 'check_calendar':

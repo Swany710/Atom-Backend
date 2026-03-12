@@ -304,12 +304,15 @@ export class ToolDefinitionsService {
     ];
   }
 
-  /** Names of tools that mutate external state and require confirmation */
+  /**
+   * Tools that mutate external state and require user confirmation before
+   * executing.  Low-risk organisational actions (delete_email, archive_email,
+   * mark_email_read) are intentionally excluded so the user can manage their
+   * inbox without an extra confirmation step.
+   */
   static readonly WRITE_TOOLS = new Set([
     'send_email',
     'reply_email',
-    'delete_email',
-    'archive_email',
     'create_calendar_event',
     'update_calendar_event',
     'delete_calendar_event',
