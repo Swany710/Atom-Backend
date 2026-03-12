@@ -172,6 +172,7 @@ export class AIVoiceController {
         file.buffer,
         userId,
         conversationId,
+        file.mimetype,   // pass actual MIME type so Whisper gets the right extension
       );
 
       // Always expose metadata headers regardless of response type
@@ -193,9 +194,11 @@ export class AIVoiceController {
       };
       res.json(body);
     } catch (error: any) {
+      // Surface the real error message so callers can diagnose failures
+      const detail = error instanceof Error ? error.message : String(error);
       res.status(500).json({
-        message: 'Failed to process voice command',
-        error: error.message,
+        message: `Voice processing failed: ${detail}`,
+        error: detail,
       });
     }
   }
