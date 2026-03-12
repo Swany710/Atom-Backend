@@ -10,6 +10,13 @@ import { providerAI } from '../utils/provider-call';
 export interface ChatResult {
   response: string;
   toolCalls: Array<{ tool: string; args: unknown; result: unknown }>;
+  /**
+   * All new MessageParam rows produced this turn (user message + every
+   * tool_use / tool_result pair + final assistant response).  Callers should
+   * persist these via ConversationMemoryService.appendMessages() so that
+   * pendingActionId survives across HTTP requests.
+   */
+  newMessages: MessageParam[];
 }
 
 /**
@@ -124,6 +131,7 @@ READ-ONLY tools (search, read, get, check, list) execute immediately — no conf
   ): Promise<ChatResult> {
     // 1. Load conversation history
     const history = await this.memory.loadHistory(sessionId);
+    const historyLen = history.length;
     const messages: MessageParam[] = [
       ...history,
       { role: 'user', content: userMessage },
@@ -221,6 +229,14 @@ READ-ONLY tools (search, read, get, check, list) execute immediately — no conf
       ? finalTextBlocks.map(b => b.text).join(' ').trim()
       : assistantText.trim() || 'I apologize, I could not generate a response.';
 
-    return { response: finalResponse, toolCalls: toolCallsExecuted };
+    // 5. Collect all new messages produced this turn for the caller to persist.
+    //    This includes the user message, any tool_use / tool_result interleave,
+    //    and the final assistant reply — everything after the loaded history.
+    const newMessages: MessageParam[] = [
+      ...messages.slice(historyLen),
+      { role: 'assistant', content: finalResponse },
+    ];
+
+    return { response: finalResponse, toolCalls: toolCallsExecuted, newMessages };
   }
 }

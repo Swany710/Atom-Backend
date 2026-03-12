@@ -43,6 +43,9 @@ export class ConversationMemoryService {
    * Load recent conversation history for a session as Anthropic MessageParam[].
    * Returns rows in chronological order (oldest first) so they can be passed
    * directly to the Anthropic messages array.
+   *
+   * Content is stored as JSON for complex messages (tool_use / tool_result
+   * blocks).  Legacy plain-text rows are returned as-is (string content).
    */
   async loadHistory(
     sessionId: string,
@@ -54,17 +57,47 @@ export class ConversationMemoryService {
       take: limit,
     });
 
-    return rows.map(m => ({
-      role:    m.role as 'user' | 'assistant',
-      content: m.content,
-    }));
+    return rows.map(m => {
+      // Try to deserialise JSON content (tool_use / tool_result block arrays).
+      // Fall back to the raw string for legacy plain-text rows.
+      let content: string | any[];
+      try {
+        const parsed = JSON.parse(m.content);
+        content = Array.isArray(parsed) ? parsed : m.content;
+      } catch {
+        content = m.content;
+      }
+      return { role: m.role as 'user' | 'assistant', content };
+    });
   }
 
   // ── Write ─────────────────────────────────────────────────────────────────
 
   /**
+   * Persist the full set of new MessageParam rows produced in a single turn.
+   * Handles both plain-text content (string) and structured content arrays
+   * (tool_use / tool_result blocks) by JSON-serialising the latter.
+   *
+   * This replaces appendPair() for all callers that need to preserve the full
+   * tool-use conversation thread so pendingActionId survives across requests.
+   */
+  async appendMessages(
+    sessionId: string,
+    messages: MessageParam[],
+  ): Promise<void> {
+    const rows = messages.map(msg => ({
+      sessionId,
+      role: msg.role,
+      content: typeof msg.content === 'string'
+        ? msg.content
+        : JSON.stringify(msg.content),
+    }));
+    await this.repo.save(rows);
+  }
+
+  /**
    * Persist a user turn and the assistant reply atomically.
-   * Called by AIVoiceService after every successful runChat() result.
+   * @deprecated Use appendMessages() instead — kept for backwards compat.
    */
   async appendPair(
     sessionId: string,

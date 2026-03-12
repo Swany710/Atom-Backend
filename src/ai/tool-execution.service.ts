@@ -162,7 +162,7 @@ export class ToolExecutionService {
             args.cc as string[] | undefined,
             undefined,
             undefined,
-            sessionId,
+            userId,   // ← was sessionId (conversation ID); must be the auth user ID
           ),
           'gmail.sendEmail',
         );
@@ -192,7 +192,7 @@ export class ToolExecutionService {
 
       case 'create_calendar_event':
         return providerWrite(
-          () => this.createCalendarEvent(args, sessionId),
+          () => this.createCalendarEvent(args, userId, sessionId),
           'calendar.createEvent',
         );
 
@@ -311,6 +311,7 @@ export class ToolExecutionService {
             args.start_date as string,
             args.end_date as string | undefined,
             args.search_query as string | undefined,
+            userId,      // ← was sessionId; must be the auth user ID for OAuth lookup
             sessionId,
           ),
           'calendar.checkCalendar',
@@ -397,18 +398,19 @@ export class ToolExecutionService {
     startDate: string,
     endDate?: string,
     searchQuery?: string,
+    userId?: string,    // ← auth user ID for OAuth lookup
     sessionId?: string,
   ): Promise<unknown> {
     try {
-      const userId = sessionId ?? '';
-      const status = await this.googleCalendar.getConnectionStatus(userId);
+      const uid = userId ?? '';
+      const status = await this.googleCalendar.getConnectionStatus(uid);
       if (status.connected) {
         const days = endDate
           ? Math.ceil(
               (new Date(endDate).getTime() - new Date(startDate).getTime()) / 86_400_000,
             )
           : 1;
-        return this.googleCalendar.getUpcomingEvents(userId, Math.max(days, 1));
+        return this.googleCalendar.getUpcomingEvents(uid, Math.max(days, 1));
       }
     } catch { /* fall through to CalendarService */ }
 
@@ -417,14 +419,15 @@ export class ToolExecutionService {
 
   private async createCalendarEvent(
     args: Record<string, unknown>,
+    userId?: string,    // ← auth user ID for OAuth lookup
     sessionId?: string,
   ): Promise<unknown> {
     try {
-      const userId = sessionId ?? '';
-      const status = await this.googleCalendar.getConnectionStatus(userId);
+      const uid = userId ?? '';
+      const status = await this.googleCalendar.getConnectionStatus(uid);
       if (status.connected) {
         return this.googleCalendar.createEvent(
-          userId,
+          uid,
           args.title as string,
           args.start_time as string,
           args.end_time as string,

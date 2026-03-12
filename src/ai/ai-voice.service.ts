@@ -68,15 +68,16 @@ export class AIVoiceService {
   ): Promise<ProcessResult> {
     const sessionId = conversationId ?? userId;
 
-    const { response: reply, toolCalls } = await this.orchestrator.runChat(
+    const { response: reply, toolCalls, newMessages } = await this.orchestrator.runChat(
       sessionId,
       message,
       userId,
       correlationId,
     );
 
-    // Persist the exchange after Claude responds
-    await this.memory.appendPair(sessionId, message, reply);
+    // Persist the full turn (user msg + tool turns + assistant reply) so that
+    // pendingActionId survives across HTTP requests for write-action confirmation.
+    await this.memory.appendMessages(sessionId, newMessages);
 
     return {
       response:       reply,
@@ -118,14 +119,14 @@ export class AIVoiceService {
 
     // Step 2 — Reasoning: transcription → reply (Claude)
     const sessionId = conversationId ?? userId;
-    const { response: reply, toolCalls } = await this.orchestrator.runChat(
+    const { response: reply, toolCalls, newMessages } = await this.orchestrator.runChat(
       sessionId,
       transcription,
       userId,
     );
 
-    // Persist the exchange
-    await this.memory.appendPair(sessionId, transcription, reply);
+    // Persist the full turn so pendingActionId survives across requests.
+    await this.memory.appendMessages(sessionId, newMessages);
 
     // Step 3 — TTS: reply → audio/mpeg (OpenAI TTS)
     // Failure here is intentionally swallowed — the text response is still valid.
