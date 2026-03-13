@@ -8,24 +8,19 @@ import { createReadStream } from 'fs';
 import { providerAudio } from '../utils/provider-call';
 
 /**
- * OpenAiVoiceGatewayService
+ * OpenAiTranscriptionService
  *
  * OpenAI is used EXCLUSIVELY for audio I/O:
  *   - Speech-to-Text  :  audio buffer → transcription string  (Whisper)
  *   - Text-to-Speech  :  text string  → audio/mpeg buffer     (OpenAI TTS)
  *
  * OpenAI is NOT used for reasoning, tool selection, or orchestration —
- * all decision-making flows through ClaudeTaskOrchestratorService.
- *
- * Voice pipeline wiring (owned by AIVoiceService):
- *   audio  →  transcribe()            [OpenAI Whisper]
- *          →  ClaudeTaskOrchestratorService.runChat()  [Anthropic Claude]
- *          →  synthesise()            [OpenAI TTS]
+ * all decision-making flows through ClaudeOrchestratorService.
  */
 @Injectable()
-export class OpenAiVoiceGatewayService {
+export class OpenAiTranscriptionService {
   private readonly openai: OpenAI;
-  private readonly logger = new Logger(OpenAiVoiceGatewayService.name);
+  private readonly logger = new Logger(OpenAiTranscriptionService.name);
 
   constructor(private readonly config: ConfigService) {
     this.openai = new OpenAI({
@@ -37,14 +32,6 @@ export class OpenAiVoiceGatewayService {
 
   /**
    * Transcribe an audio buffer using OpenAI Whisper.
-   *
-   * Whisper requires a ReadStream (not a Buffer), so we write a temp file,
-   * create the stream, transcribe, and clean up — all within this method.
-   *
-   * @param audioBuffer  Raw audio bytes from the multipart upload.
-   * @param mimeType     MIME type hint used to choose the correct file extension.
-   * @returns            Transcribed text string.
-   * @throws             If Whisper returns an empty transcription or call fails.
    */
   async transcribe(audioBuffer: Buffer, mimeType?: string): Promise<string> {
     const ext = mimeType?.includes('webm') ? '.webm'
@@ -80,12 +67,7 @@ export class OpenAiVoiceGatewayService {
 
   /**
    * Convert a Claude reply to audio/mpeg (optional — used in voice pipeline).
-   *
-   * Returns `undefined` on failure so audio failures do NOT break the text
-   * response path.  Pre-cleans markdown formatting before sending to TTS.
-   *
-   * @param text   Claude's text reply.
-   * @param voice  OpenAI TTS voice variant (default: 'alloy').
+   * Returns undefined on failure so audio failures do NOT break the text response.
    */
   async synthesise(
     text: string,
@@ -113,11 +95,8 @@ export class OpenAiVoiceGatewayService {
 
   /**
    * Standalone TTS — converts any text to audio/mpeg.
-   * Used by the POST /ai/speak endpoint.
-   * Unlike synthesise(), this throws on failure (caller returns 500).
-   *
-   * @param text   Text to convert to speech.
-   * @param voice  OpenAI TTS voice variant (default: 'nova').
+   * Used by the POST /api/v1/ai/speak endpoint.
+   * Unlike synthesise(), this throws on failure.
    */
   async generateSpeech(
     text: string,
@@ -138,16 +117,12 @@ export class OpenAiVoiceGatewayService {
 
   // ── Private helpers ───────────────────────────────────────────────────────
 
-  /**
-   * Strip markdown syntax that TTS engines render as literal characters
-   * (e.g. "asterisk asterisk bold asterisk asterisk").
-   */
   private cleanForTts(text: string): string {
     return text
-      .replace(/```[\s\S]*?```/g, '')          // fenced code blocks
-      .replace(/\*\*|__|\*|_|~~|`/g, '')        // inline emphasis / code
-      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')  // markdown links → label only
+      .replace(/```[\s\S]*?```/g, '')
+      .replace(/\*\*|__|\*|_|~~|`/g, '')
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
       .trim()
-      .slice(0, 4096);                          // OpenAI TTS character limit
+      .slice(0, 4096);
   }
 }

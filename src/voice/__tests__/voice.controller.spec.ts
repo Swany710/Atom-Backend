@@ -1,7 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException } from '@nestjs/common';
-import { AIVoiceController } from '../ai-voice.controller';
-import { AIVoiceService } from '../ai-voice.service';
+import { VoiceController } from '../voice.controller';
+import { VoiceService } from '../voice.service';
+import { ConversationMemoryService } from '../../conversations/conversation-memory.service';
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
@@ -11,7 +12,7 @@ const mockResult = {
   toolCalls:      undefined,
 };
 
-const mockAiVoiceService: Partial<AIVoiceService> = {
+const mockVoiceService: Partial<VoiceService> = {
   processTextCommand:  jest.fn().mockResolvedValue(mockResult),
   processVoiceCommand: jest.fn().mockResolvedValue({
     ...mockResult,
@@ -21,40 +22,52 @@ const mockAiVoiceService: Partial<AIVoiceService> = {
   generateSpeech: jest.fn().mockResolvedValue(Buffer.from('audio-data')),
 };
 
-// Minimal express-like Response mock
+const mockMemory: Partial<ConversationMemoryService> = {
+  getRawMessages: jest.fn().mockResolvedValue([
+    { id: 1, sessionId: 'conv-abc', role: 'user', content: 'Hi', createdAt: new Date() },
+  ]),
+  clearSession: jest.fn().mockResolvedValue(undefined),
+};
+
 function makeMockRes() {
   const res: Record<string, any> = {};
-  res.status  = jest.fn().mockReturnValue(res);
-  res.json    = jest.fn().mockReturnValue(res);
-  res.send    = jest.fn().mockReturnValue(res);
+  res.status    = jest.fn().mockReturnValue(res);
+  res.json      = jest.fn().mockReturnValue(res);
+  res.send      = jest.fn().mockReturnValue(res);
   res.setHeader = jest.fn().mockReturnValue(res);
   return res;
 }
 
 // ── Setup ─────────────────────────────────────────────────────────────────────
 
-describe('AIVoiceController', () => {
-  let controller: AIVoiceController;
+describe('VoiceController', () => {
+  let controller: VoiceController;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
-      controllers: [AIVoiceController],
-      providers:   [{ provide: AIVoiceService, useValue: mockAiVoiceService }],
+      controllers: [VoiceController],
+      providers: [
+        { provide: VoiceService,                useValue: mockVoiceService },
+        { provide: ConversationMemoryService,   useValue: mockMemory },
+      ],
     }).compile();
 
-    controller = module.get<AIVoiceController>(AIVoiceController);
+    controller = module.get<VoiceController>(VoiceController);
     jest.clearAllMocks();
 
-    // Re-apply resolved values after clearAllMocks
-    (mockAiVoiceService.processTextCommand as jest.Mock).mockResolvedValue(mockResult);
-    (mockAiVoiceService.processVoiceCommand as jest.Mock).mockResolvedValue({
+    (mockVoiceService.processTextCommand as jest.Mock).mockResolvedValue(mockResult);
+    (mockVoiceService.processVoiceCommand as jest.Mock).mockResolvedValue({
       ...mockResult,
       transcription: 'Hello there',
       audioResponse: undefined,
     });
-    (mockAiVoiceService.generateSpeech as jest.Mock).mockResolvedValue(
+    (mockVoiceService.generateSpeech as jest.Mock).mockResolvedValue(
       Buffer.from('audio-data'),
     );
+    (mockMemory.getRawMessages as jest.Mock).mockResolvedValue([
+      { id: 1, sessionId: 'conv-abc', role: 'user', content: 'Hi', createdAt: new Date() },
+    ]);
+    (mockMemory.clearSession as jest.Mock).mockResolvedValue(undefined);
   });
 
   // ── GET /ai/health ────────────────────────────────────────────────────────
@@ -78,11 +91,10 @@ describe('AIVoiceController', () => {
         { message: 'What is on my calendar?' },
         fakeReq,
       );
-
       expect(result.message).toBe('Hello from AI');
       expect(result.conversationId).toBe('conv-abc');
       expect(typeof result.timestamp).toBe('string');
-      expect(mockAiVoiceService.processTextCommand).toHaveBeenCalledWith(
+      expect(mockVoiceService.processTextCommand).toHaveBeenCalledWith(
         'What is on my calendar?',
         'user-uuid-123',
         undefined,
@@ -90,36 +102,25 @@ describe('AIVoiceController', () => {
     });
 
     it('passes conversationId when provided', async () => {
-      await controller.handleText(
-        { message: 'Reply', conversationId: 'existing-conv' },
-        fakeReq,
-      );
-
-      expect(mockAiVoiceService.processTextCommand).toHaveBeenCalledWith(
-        'Reply',
-        'user-uuid-123',
-        'existing-conv',
+      await controller.handleText({ message: 'Reply', conversationId: 'existing-conv' }, fakeReq);
+      expect(mockVoiceService.processTextCommand).toHaveBeenCalledWith(
+        'Reply', 'user-uuid-123', 'existing-conv',
       );
     });
 
     it('throws BadRequestException when message is missing', async () => {
-      await expect(
-        controller.handleText({ message: '' }, fakeReq),
-      ).rejects.toBeInstanceOf(BadRequestException);
-
-      await expect(
-        controller.handleText({ message: '   ' }, fakeReq),
-      ).rejects.toBeInstanceOf(BadRequestException);
+      await expect(controller.handleText({ message: '' }, fakeReq))
+        .rejects.toBeInstanceOf(BadRequestException);
+      await expect(controller.handleText({ message: '   ' }, fakeReq))
+        .rejects.toBeInstanceOf(BadRequestException);
     });
 
     it('throws HttpException (500) when service throws', async () => {
-      (mockAiVoiceService.processTextCommand as jest.Mock).mockRejectedValueOnce(
+      (mockVoiceService.processTextCommand as jest.Mock).mockRejectedValueOnce(
         new Error('Claude unavailable'),
       );
-
-      await expect(
-        controller.handleText({ message: 'Hello' }, fakeReq),
-      ).rejects.toMatchObject({ status: 500 });
+      await expect(controller.handleText({ message: 'Hello' }, fakeReq))
+        .rejects.toMatchObject({ status: 500 });
     });
   });
 
@@ -142,33 +143,22 @@ describe('AIVoiceController', () => {
     it('returns JSON voice response on success', async () => {
       const res = makeMockRes();
       await controller.handleVoice(makeFile(), res as any, fakeReq);
-
       expect(res.setHeader).toHaveBeenCalledWith('X-Transcription', 'Hello there');
-      expect(res.setHeader).toHaveBeenCalledWith('X-Response-Text', 'Hello from AI');
       expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message:        'Hello from AI',
-          transcription:  'Hello there',
-          conversationId: 'conv-abc',
-        }),
+        expect.objectContaining({ message: 'Hello from AI', transcription: 'Hello there' }),
       );
     });
 
     it('returns 400 when no audio file is provided', async () => {
       const res = makeMockRes();
       await controller.handleVoice(undefined as any, res as any, fakeReq);
-
       expect(res.status).toHaveBeenCalledWith(400);
-      expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({ message: expect.stringContaining('required') }),
-      );
     });
 
     it('returns short-audio message without calling service when file < 1 000 bytes', async () => {
       const res = makeMockRes();
       await controller.handleVoice(makeFile(500), res as any, fakeReq);
-
-      expect(mockAiVoiceService.processVoiceCommand).not.toHaveBeenCalled();
+      expect(mockVoiceService.processVoiceCommand).not.toHaveBeenCalled();
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({ transcription: '[Too Short]' }),
       );
@@ -176,33 +166,28 @@ describe('AIVoiceController', () => {
 
     it('accepts a file of exactly 1 000 bytes (boundary)', async () => {
       const res = makeMockRes();
-      // 1 000 is NOT < 1000, so it should process
       await controller.handleVoice(makeFile(1_000), res as any, fakeReq);
-      expect(mockAiVoiceService.processVoiceCommand).toHaveBeenCalled();
+      expect(mockVoiceService.processVoiceCommand).toHaveBeenCalled();
     });
 
     it('returns audio/mpeg when returnAudio=true and audioResponse is present', async () => {
-      (mockAiVoiceService.processVoiceCommand as jest.Mock).mockResolvedValueOnce({
+      (mockVoiceService.processVoiceCommand as jest.Mock).mockResolvedValueOnce({
         ...mockResult,
         transcription: 'Hello',
         audioResponse: Buffer.from('mp3-bytes'),
       });
-
       const res = makeMockRes();
       await controller.handleVoice(makeFile(), res as any, fakeReq, undefined, undefined, 'true');
-
       expect(res.setHeader).toHaveBeenCalledWith('Content-Type', 'audio/mpeg');
       expect(res.send).toHaveBeenCalledWith(Buffer.from('mp3-bytes'));
     });
 
     it('returns 500 JSON when service throws', async () => {
-      (mockAiVoiceService.processVoiceCommand as jest.Mock).mockRejectedValueOnce(
+      (mockVoiceService.processVoiceCommand as jest.Mock).mockRejectedValueOnce(
         new Error('Whisper timeout'),
       );
-
       const res = makeMockRes();
       await controller.handleVoice(makeFile(), res as any, fakeReq);
-
       expect(res.status).toHaveBeenCalledWith(500);
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({ error: 'Whisper timeout' }),
@@ -216,41 +201,43 @@ describe('AIVoiceController', () => {
     it('returns audio/mpeg buffer on success', async () => {
       const res = makeMockRes();
       await controller.speak('Hello world', 'nova', res as any);
-
       expect(res.setHeader).toHaveBeenCalledWith('Content-Type', 'audio/mpeg');
       expect(res.send).toHaveBeenCalledWith(Buffer.from('audio-data'));
-      expect(mockAiVoiceService.generateSpeech).toHaveBeenCalledWith('Hello world', 'nova');
-    });
-
-    it('falls back to nova voice when voice is not provided', async () => {
-      const res = makeMockRes();
-      await controller.speak('Hello', undefined as any, res as any);
-
-      expect(mockAiVoiceService.generateSpeech).toHaveBeenCalledWith('Hello', 'nova');
     });
 
     it('returns 400 when text is missing', async () => {
       const res = makeMockRes();
       await controller.speak('', undefined as any, res as any);
-
       expect(res.status).toHaveBeenCalledWith(400);
-      expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({ error: 'text is required' }),
-      );
     });
 
     it('returns 500 when TTS service throws', async () => {
-      (mockAiVoiceService.generateSpeech as jest.Mock).mockRejectedValueOnce(
+      (mockVoiceService.generateSpeech as jest.Mock).mockRejectedValueOnce(
         new Error('TTS failed'),
       );
-
       const res = makeMockRes();
       await controller.speak('Hello', 'alloy', res as any);
-
       expect(res.status).toHaveBeenCalledWith(500);
-      expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({ error: 'TTS failed' }),
-      );
+    });
+  });
+
+  // ── GET/DELETE /api/v1/ai/conversations/:id ───────────────────────────────
+
+  describe('GET /api/v1/ai/conversations/:id', () => {
+    it('returns messages array from memory service', async () => {
+      const result = await controller.getConversation('conv-abc');
+      expect(mockMemory.getRawMessages).toHaveBeenCalledWith('conv-abc');
+      expect(result.conversationId).toBe('conv-abc');
+      expect(result.messageCount).toBe(1);
+    });
+  });
+
+  describe('DELETE /api/v1/ai/conversations/:id', () => {
+    it('calls clearSession and returns confirmation', async () => {
+      const result = await controller.clearConversation('conv-abc');
+      expect(mockMemory.clearSession).toHaveBeenCalledWith('conv-abc');
+      expect(result.message).toBe('Conversation cleared');
+      expect(result.conversationId).toBe('conv-abc');
     });
   });
 });

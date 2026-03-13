@@ -2,9 +2,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Anthropic from '@anthropic-ai/sdk';
 import type { MessageParam } from '@anthropic-ai/sdk/resources/messages';
-import { ConversationMemoryService } from './conversation-memory.service';
-import { ToolDefinitionsService } from './tool-definitions.service';
-import { ToolExecutionService } from './tool-execution.service';
+import { ConversationMemoryService } from '../conversations/conversation-memory.service';
+import { ToolDefinitionsService } from '../tools/tool-definitions.service';
+import { ToolExecutionService } from '../tools/tool-execution.service';
 import { providerAI } from '../utils/provider-call';
 
 export interface ChatResult {
@@ -20,7 +20,7 @@ export interface ChatResult {
 }
 
 /**
- * ClaudeTaskOrchestratorService
+ * ClaudeOrchestratorService
  *
  * Claude is the SOLE reasoning engine.  This service owns:
  *   - Anthropic API client and model selection
@@ -29,26 +29,14 @@ export interface ChatResult {
  *   - Task planning and tool selection decisions
  *
  * What this service does NOT do:
- *   - Transcription / TTS  →  OpenAiVoiceGatewayService
+ *   - Transcription / TTS  →  OpenAiTranscriptionService
  *   - Memory persistence   →  ConversationMemoryService
  *   - Tool dispatch        →  ToolExecutionService
- *
- * Data flow for a single turn:
- *   1. Load history from ConversationMemoryService
- *   2. Append current user message
- *   3. POST to Claude with all tool definitions
- *   4. If stop_reason === 'tool_use':
- *        a. Execute each requested tool via ToolExecutionService
- *        b. Append tool_result messages
- *        c. POST to Claude again
- *        d. Repeat until stop_reason !== 'tool_use'
- *   5. Return final text response + tool call log
- *   (Memory persistence is handled by the caller — AIVoiceService)
  */
 @Injectable()
-export class ClaudeTaskOrchestratorService {
+export class ClaudeOrchestratorService {
   private readonly anthropic: Anthropic;
-  private readonly logger = new Logger(ClaudeTaskOrchestratorService.name);
+  private readonly logger = new Logger(ClaudeOrchestratorService.name);
 
   /** Claude model used for all orchestration and task execution. */
   static readonly MODEL = 'claude-sonnet-4-5-20250929';
@@ -115,13 +103,8 @@ READ-ONLY tools (search, read, get, check, list) execute immediately — no conf
   /**
    * Run a full chat turn:  load history → call Claude → tool loop → return text.
    *
-   * Memory persistence (appendPair) is intentionally left to the caller
-   * (AIVoiceService) so the orchestrator stays stateless and testable.
-   *
-   * @param sessionId     Conversation thread identifier.
-   * @param userMessage   Raw user input (already transcribed if voice).
-   * @param userId        Authenticated user ID — passed to ToolExecutionService.
-   * @param correlationId Optional request tracing ID.
+   * Memory persistence is intentionally left to the caller (VoiceService) so
+   * the orchestrator stays stateless and testable.
    */
   async runChat(
     sessionId: string,
@@ -143,7 +126,7 @@ READ-ONLY tools (search, read, get, check, list) execute immediately — no conf
     // 2. Initial Claude call
     let response = await providerAI(
       () => this.anthropic.messages.create({
-        model:      ClaudeTaskOrchestratorService.MODEL,
+        model:      ClaudeOrchestratorService.MODEL,
         max_tokens: 1024,
         system:     this.systemPrompt,
         messages,
@@ -154,7 +137,7 @@ READ-ONLY tools (search, read, get, check, list) execute immediately — no conf
 
     let assistantText = '';
 
-    // 3. Tool-use loop — Claude may request multiple parallel tool calls per turn
+    // 3. Tool-use loop
     while (response.stop_reason === 'tool_use') {
       const textBlocks = response.content.filter(
         (b): b is Anthropic.Messages.TextBlock => b.type === 'text',
@@ -165,15 +148,12 @@ READ-ONLY tools (search, read, get, check, list) execute immediately — no conf
 
       assistantText = textBlocks.map(b => b.text).join(' ');
 
-      // Append the full assistant turn (text + tool_use blocks) to message thread
       messages.push({ role: 'assistant', content: response.content });
 
       const toolResults: Anthropic.Messages.ToolResultBlockParam[] = [];
 
       for (const toolUse of toolUseBlocks) {
-        this.logger.log(
-          `[${correlationId ?? sessionId}] tool_use: ${toolUse.name}`,
-        );
+        this.logger.log(`[${correlationId ?? sessionId}] tool_use: ${toolUse.name}`);
 
         let result: unknown;
         try {
@@ -192,11 +172,7 @@ READ-ONLY tools (search, read, get, check, list) execute immediately — no conf
           result = { error: errMsg, tool: toolUse.name };
         }
 
-        toolCallsExecuted.push({
-          tool:   toolUse.name,
-          args:   toolUse.input,
-          result,
-        });
+        toolCallsExecuted.push({ tool: toolUse.name, args: toolUse.input, result });
 
         toolResults.push({
           type:        'tool_result',
@@ -205,12 +181,11 @@ READ-ONLY tools (search, read, get, check, list) execute immediately — no conf
         });
       }
 
-      // Feed tool results back to Claude
       messages.push({ role: 'user', content: toolResults });
 
       response = await providerAI(
         () => this.anthropic.messages.create({
-          model:      ClaudeTaskOrchestratorService.MODEL,
+          model:      ClaudeOrchestratorService.MODEL,
           max_tokens: 1024,
           system:     this.systemPrompt,
           messages,
@@ -230,8 +205,6 @@ READ-ONLY tools (search, read, get, check, list) execute immediately — no conf
       : assistantText.trim() || 'I apologize, I could not generate a response.';
 
     // 5. Collect all new messages produced this turn for the caller to persist.
-    //    This includes the user message, any tool_use / tool_result interleave,
-    //    and the final assistant reply — everything after the loaded history.
     const newMessages: MessageParam[] = [
       ...messages.slice(historyLen),
       { role: 'assistant', content: finalResponse },

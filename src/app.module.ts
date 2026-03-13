@@ -4,10 +4,7 @@ import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { JwtModule } from '@nestjs/jwt';
-import { AppController } from './app.controller';
-import { AppService } from './app.service';
-import { AIVoiceModule } from './ai/ai-voice.module';
-import { ChatMemory } from './ai/chat-memory.entity';
+import { VoiceModule } from './voice/voice.module';
 import { EmailModule } from './integrations/email/email.module';
 import { CalendarModule } from './integrations/calendar/calendar.module';
 import { CrmModule } from './integrations/crm/crm.module';
@@ -60,7 +57,6 @@ const isProd = process.env.NODE_ENV === 'production';
         limit: 120,    // max requests per window
       },
     ]),
-    TypeOrmModule.forFeature([ChatMemory]),
     // JwtModule at root level so ApiKeyGuard (APP_GUARD) can inject JwtService
     JwtModule.registerAsync({
       useFactory: () => ({
@@ -72,19 +68,14 @@ const isProd = process.env.NODE_ENV === 'production';
     AuditModule,
     AuthModule,
     PendingActionModule,
-    AIVoiceModule,
+    VoiceModule,
     EmailModule,
     CalendarModule,
     CrmModule,
     KnowledgeBaseModule,
   ],
-  controllers: [AppController],
   providers: [
-    AppService,
-    // Global API-key guard — must come before ThrottlerGuard in the array
     { provide: APP_GUARD, useClass: ApiKeyGuard },
-    // Rate-limit guard applied after auth so unauthenticated requests are
-    // rejected by ApiKeyGuard first (no wasted throttle counter slots).
     { provide: APP_GUARD, useClass: ThrottlerGuard },
   ],
 })
