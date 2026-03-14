@@ -1,6 +1,10 @@
 import { Req, Controller, Get, Post, Patch, Delete, Body, Query, Param } from '@nestjs/common';
+
+import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { GoogleCalendarService } from './google-calendar.service';
 
+@ApiBearerAuth('bearer')
+@ApiTags('Calendar')
 @Controller('api/v1/integrations/calendar')
 export class CalendarController {
   constructor(private readonly googleCalendar: GoogleCalendarService) {}

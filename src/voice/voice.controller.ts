@@ -14,6 +14,8 @@ import {
   Req,
   Param,
 } from '@nestjs/common';
+
+import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { VoiceService } from './voice.service';
 import { ConversationMemoryService } from '../conversations/conversation-memory.service';
@@ -62,6 +64,7 @@ interface MulterFile {
  *   GET    /api/v1/ai/conversations/:id
  *   DELETE /api/v1/ai/conversations/:id
  */
+@ApiTags('AI')
 @Controller('api/v1/ai')
 export class VoiceController {
   constructor(

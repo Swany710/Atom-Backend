@@ -2,6 +2,8 @@ import {
   Controller, Get, Param, Query, BadRequestException,
   Post, Delete, Patch, Body, Inject, Req,
 } from '@nestjs/common';
+
+import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { EmailOAuthService } from './email-oauth.service';
 import { GmailService } from './gmail.service';
 import { EmailProviderName, emailProviderNames } from './email.types';
@@ -17,6 +19,8 @@ class SendEmailDto {
   draftOnly?: boolean;
 }
 
+@ApiBearerAuth('bearer')
+@ApiTags('Email')
 @Controller('api/v1/integrations/email')
 export class EmailController {
   constructor(

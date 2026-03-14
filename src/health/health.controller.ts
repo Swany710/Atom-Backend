@@ -1,4 +1,6 @@
 import { Controller, Get, HttpCode, HttpStatus, Res } from '@nestjs/common';
+
+import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { Response } from 'express';
@@ -15,6 +17,7 @@ import { Public } from '../decorators/public.decorator';
  *
  * Both endpoints are @Public() — health-checkers do not carry Authorization.
  */
+@ApiTags('Health')
 @Controller('health')
 export class HealthController {
   constructor(

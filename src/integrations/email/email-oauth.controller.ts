@@ -1,4 +1,6 @@
 import { Controller, Get, Delete, Query, Res, HttpStatus, Req } from '@nestjs/common';
+
+import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
 import { Public } from '../../decorators/public.decorator';
 import { EmailOAuthService } from './email-oauth.service';
@@ -13,6 +15,7 @@ import { EmailProviderName } from './email.types';
  * userId is resolved server-side: req.atomUserId (set by ApiKeyGuard when a JWT/API-key
  * IS present) falls back to OWNER_USER_ID env var, then 'owner'.
  */
+@ApiTags('Email')
 @Controller('email/oauth')
 export class EmailOAuthController {
   constructor(
