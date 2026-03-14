@@ -266,4 +266,65 @@ export class VoiceController {
     await this.memory.clearSession(id);
     return { message: 'Conversation cleared', conversationId: id };
   }
+
+  // ── OpenAI Realtime ephemeral token ───────────────────────────────────────
+  // Frontend requests a short-lived token so the OpenAI API key never
+  // leaves the server. Token is valid for 60 seconds.
+
+  @Public()
+  @Post('realtime-token')
+  async getRealtimeToken(@Req() req: any) {
+    const openaiKey = process.env.OPENAI_API_KEY;
+    if (!openaiKey) {
+      throw new HttpException('OPENAI_API_KEY not configured', HttpStatus.SERVICE_UNAVAILABLE);
+    }
+
+    const today = new Date().toLocaleDateString('en-US', {
+      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+    });
+    const systemPrompt = [
+      'You are Atom, an AI personal assistant for a roofing and contracting business.',
+      'You are proactive, organized, and operate like a world-class executive assistant.',
+      `Today is ${today}.`,
+      'Keep responses concise and natural for voice conversation. Speak clearly and directly.',
+    ].join(' ');
+
+    try {
+      const response = await fetch('https://api.openai.com/v1/realtime/sessions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${openaiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o-realtime-preview-2024-12-17',
+          voice: 'alloy',
+          instructions: systemPrompt,
+          input_audio_transcription: { model: 'whisper-1' },
+          turn_detection: {
+            type: 'server_vad',
+            threshold: 0.5,
+            prefix_padding_ms: 300,
+            silence_duration_ms: 500,
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new HttpException(`OpenAI error: ${errText}`, HttpStatus.BAD_GATEWAY);
+      }
+
+      const session = await response.json() as any;
+      return {
+        clientSecret: session.client_secret?.value ?? session.client_secret,
+        sessionId:    session.id,
+        expiresAt:    session.expires_at,
+      };
+    } catch (err: any) {
+      if (err instanceof HttpException) throw err;
+      throw new HttpException(err.message, HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+
 }
