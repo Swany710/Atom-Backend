@@ -2,6 +2,7 @@ node_modules
 npm-debug.log
 .env
 .env.local
+.env.*.local
 .git
 .gitignore
 README.md
@@ -9,3 +10,22 @@ README.md
 *.log
 .vscode
 .idea
+
+# Uploaded files — should be on a volume or object storage, not in the image
+uploads/
+*.mp3
+*.mp4
+*.wav
+*.webm
+
+# Build output — rebuilt during docker build
+dist/
+build/
+*.tsbuildinfo
+
+# Dev tooling — not needed at runtime
+jest.config.ts
+debug-*.js
+test-*.js
+simple-test.js
+deployment-debug.js
