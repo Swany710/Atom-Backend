@@ -54,25 +54,25 @@ export function validateProductionEnv(): void {
   }
 
   // Validate OAUTH_STATE_SECRET: minimum 32 chars
-  if ((process.env.OAUTH_STATE_SECRET!).length < 32) {
+  if ((process.env.OAUTH_STATE_SECRET ?? '').length < 32) {
     console.error('FATAL: OAUTH_STATE_SECRET must be at least 32 characters.');
     process.exit(1);
   }
 
   // Validate API_KEY: minimum 32 chars
-  if ((process.env.API_KEY!).length < 32) {
+  if ((process.env.API_KEY ?? '').length < 32) {
     console.error('FATAL: API_KEY must be at least 32 characters for security.');
     process.exit(1);
   }
 
   // Validate ALLOWED_ORIGINS: no wildcard in production
-  if (process.env.ALLOWED_ORIGINS!.trim() === '*') {
+  if ((process.env.ALLOWED_ORIGINS ?? '').trim() === '*') {
     console.error('FATAL: ALLOWED_ORIGINS cannot be "*" in production.');
     process.exit(1);
   }
 
   // Validate JWT_SECRET: minimum 32 chars
-  if ((process.env.JWT_SECRET!).length < 32) {
+  if ((process.env.JWT_SECRET ?? '').length < 32) {
     console.error('FATAL: JWT_SECRET must be at least 32 characters for security.');
     process.exit(1);
   }

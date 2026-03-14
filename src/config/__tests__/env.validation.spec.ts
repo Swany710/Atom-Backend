@@ -1,15 +1,12 @@
-import { validateProductionEnv } from '../env.validation';
-
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-/** Build a fully-valid production environment */
 function validProdEnv(): Record<string, string> {
   return {
     NODE_ENV:              'production',
     API_KEY:               'a'.repeat(32),
     ALLOWED_ORIGINS:       'https://app.example.com',
     DATABASE_URL:          'postgres://localhost/test',
-    TOKEN_ENCRYPTION_KEY:  '0'.repeat(64),   // 64 hex chars
+    TOKEN_ENCRYPTION_KEY:  '0'.repeat(64),
     OAUTH_STATE_SECRET:    'b'.repeat(32),
     JWT_SECRET:            'c'.repeat(32),
     GOOGLE_CLIENT_ID:      'google-client-id',
@@ -19,19 +16,34 @@ function validProdEnv(): Record<string, string> {
   };
 }
 
-/** Run validateProductionEnv with env overrides, returns exit code or void */
+/**
+ * Run validateProductionEnv with the given env.
+ * Keys mapped to undefined are explicitly DELETED so process.env[key] is truly absent.
+ */
 function runValidation(envOverride: Record<string, string | undefined>): void {
-  const original = { ...process.env };
-  // Clear existing vars, then apply fresh set
-  for (const key of Object.keys(original)) delete (process.env as any)[key];
-  Object.assign(process.env, { ...validProdEnv(), ...envOverride });
+  const saved = { ...process.env };
+
+  // Reset to a clean production baseline
+  for (const key of Object.keys(process.env)) delete (process.env as any)[key];
+  Object.assign(process.env, validProdEnv());
+
+  // Apply overrides: undefined means delete, string means set
+  for (const [key, value] of Object.entries(envOverride)) {
+    if (value === undefined) {
+      delete (process.env as any)[key];
+    } else {
+      (process.env as any)[key] = value;
+    }
+  }
 
   try {
+    const { validateProductionEnv } = require('../env.validation');
     validateProductionEnv();
   } finally {
     // Restore original env
     for (const key of Object.keys(process.env)) delete (process.env as any)[key];
-    Object.assign(process.env, original);
+    Object.assign(process.env, saved);
+    jest.resetModules();
   }
 }
 
@@ -39,11 +51,11 @@ function runValidation(envOverride: Record<string, string | undefined>): void {
 
 describe('validateProductionEnv', () => {
   let exitSpy: jest.SpyInstance;
-  let consoleSpy: jest.SpyInstance;
 
   beforeEach(() => {
-    exitSpy    = jest.spyOn(process, 'exit').mockImplementation((() => {}) as any);
-    consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    jest.resetModules();
+    exitSpy = jest.spyOn(process, 'exit').mockImplementation((() => {}) as any);
+    jest.spyOn(console, 'error').mockImplementation(() => {});
     jest.spyOn(console, 'warn').mockImplementation(() => {});
     jest.spyOn(console, 'log').mockImplementation(() => {});
   });
@@ -52,22 +64,16 @@ describe('validateProductionEnv', () => {
     jest.restoreAllMocks();
   });
 
-  // ── Development mode: no exits ─────────────────────────────────────────────
+  // ── Development mode ───────────────────────────────────────────────────────
 
   describe('development mode', () => {
     it('does not call process.exit even when variables are missing', () => {
-      const original = process.env.NODE_ENV;
-      (process.env as any).NODE_ENV = 'development';
-      try {
-        validateProductionEnv(); // whatever is in process.env, should not exit
-      } finally {
-        (process.env as any).NODE_ENV = original;
-      }
+      runValidation({ NODE_ENV: 'development', API_KEY: undefined });
       expect(exitSpy).not.toHaveBeenCalled();
     });
   });
 
-  // ── Production: valid baseline passes ─────────────────────────────────────
+  // ── Production valid baseline ──────────────────────────────────────────────
 
   describe('production mode — valid baseline', () => {
     it('passes without calling process.exit when all vars are correct', () => {
@@ -96,7 +102,6 @@ describe('validateProductionEnv', () => {
       it(`calls process.exit(1) when ${varName} is missing`, () => {
         runValidation({ [varName]: undefined });
         expect(exitSpy).toHaveBeenCalledWith(1);
-        exitSpy.mockClear();
       });
     }
   });
