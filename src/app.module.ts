@@ -19,14 +19,6 @@ import { CorrelationMiddleware } from './middleware/correlation.middleware';
 
 const isProd = process.env.NODE_ENV === 'production';
 
-/**
- * Detect whether DATABASE_URL points at Supabase's Transaction Pooler.
- * Transaction pooler URLs use port 6543.
- * Direct connection URLs use port 5432.
- *
- * The pooler does NOT support TypeORM's LISTEN/NOTIFY or prepared statements.
- * We set `extra.statement_timeout` and disable prepared statements accordingly.
- */
 const isSupabasePooler = (url?: string): boolean =>
   !!url && (url.includes('pooler.supabase.com') || url.includes(':6543'));
 
@@ -50,23 +42,22 @@ const isSupabase = (url?: string): boolean =>
           type: 'postgres',
           url:  dbUrl,
 
-          // Production: run migrations on boot, never auto-alter schema
           synchronize:   !isProd,
           migrationsRun: isProd,
           migrations:    ['dist/migrations/*.js'],
           autoLoadEntities: true,
 
-          // SSL required for Supabase — rejectUnauthorized only if explicitly enabled
           ssl: supa || process.env.DATABASE_SSL === 'true'
-            ? { rejectUnauthorized: process.env.DATABASE_TLS_STRICT === 'true' }
+            ? { rejectUnauthorized: false }
             : false,
 
           extra: {
-            // Supabase Transaction Pooler max connections per Railway instance
-            // Free plan: 15 max per user+db combo — stay well under
+            // Force IPv4 — Railway cannot reach Supabase over IPv6 (ENETUNREACH)
+            family: 4,
+
             max: pooler ? 3 : 5,
-            connectionTimeoutMillis: 10_000,
-            idleTimeoutMillis:       30_000,
+            connectionTimeoutMillis: 15_000,
+            idleTimeoutMillis: 30_000,
 
             // Transaction pooler doesn't support named prepared statements
             ...(pooler ? { prepare: false } : {}),
@@ -77,7 +68,6 @@ const isSupabase = (url?: string): boolean =>
       },
     }),
 
-    // Rate limiting: 120 req/min per IP globally
     ThrottlerModule.forRoot([
       {
         name:  'default',
@@ -86,7 +76,6 @@ const isSupabase = (url?: string): boolean =>
       },
     ]),
 
-    // JWT at root level so ApiKeyGuard (APP_GUARD) can inject JwtService
     JwtModule.registerAsync({
       useFactory: () => ({
         secret:      process.env.JWT_SECRET ?? 'dev-jwt-secret-UNSAFE',
