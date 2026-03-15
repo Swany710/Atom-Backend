@@ -4,6 +4,7 @@ import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { JwtModule } from '@nestjs/jwt';
+import * as dns from 'dns';
 import { VoiceModule } from './voice/voice.module';
 import { EmailModule } from './integrations/email/email.module';
 import { CalendarModule } from './integrations/calendar/calendar.module';
@@ -16,6 +17,11 @@ import { AuthModule } from './auth/auth.module';
 import { PendingActionModule } from './pending-actions/pending-action.module';
 import { MemoryModule } from './memory/memory.module';
 import { CorrelationMiddleware } from './middleware/correlation.middleware';
+
+// Force Node.js to prefer IPv4 for ALL DNS lookups globally.
+// Railway containers cannot reach external IPv6 addresses (ENETUNREACH).
+// This must be set before any network connections are made.
+dns.setDefaultResultOrder('ipv4first');
 
 const isProd = process.env.NODE_ENV === 'production';
 
@@ -42,24 +48,21 @@ const isSupabase = (url?: string): boolean =>
           type: 'postgres',
           url:  dbUrl,
 
-          synchronize:   !isProd,
-          migrationsRun: isProd,
-          migrations:    ['dist/migrations/*.js'],
+          synchronize:      !isProd,
+          migrationsRun:    isProd,
+          migrations:       ['dist/migrations/*.js'],
           autoLoadEntities: true,
 
+          // SSL required for Supabase
           ssl: supa || process.env.DATABASE_SSL === 'true'
             ? { rejectUnauthorized: false }
             : false,
 
           extra: {
-            // Force IPv4 — Railway cannot reach Supabase over IPv6 (ENETUNREACH)
-            family: 4,
-
-            max: pooler ? 3 : 5,
+            max:                     pooler ? 3 : 5,
             connectionTimeoutMillis: 15_000,
-            idleTimeoutMillis: 30_000,
-
-            // Transaction pooler doesn't support named prepared statements
+            idleTimeoutMillis:       30_000,
+            // Pooler doesn't support named prepared statements
             ...(pooler ? { prepare: false } : {}),
           },
 
@@ -68,13 +71,7 @@ const isSupabase = (url?: string): boolean =>
       },
     }),
 
-    ThrottlerModule.forRoot([
-      {
-        name:  'default',
-        ttl:   60_000,
-        limit: 120,
-      },
-    ]),
+    ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: 120 }]),
 
     JwtModule.registerAsync({
       useFactory: () => ({
@@ -106,11 +103,11 @@ export class AppModule implements NestModule {
   }
 
   constructor() {
-    const dbUrl  = process.env.DATABASE_URL ?? '';
-    const mode   = isSupabasePooler(dbUrl) ? 'Supabase pooler'
-                 : isSupabase(dbUrl)        ? 'Supabase direct'
-                 : dbUrl                    ? 'Postgres'
-                 :                            'NO DATABASE_URL SET';
+    const dbUrl = process.env.DATABASE_URL ?? '';
+    const mode  = isSupabasePooler(dbUrl) ? 'Supabase pooler'
+                : isSupabase(dbUrl)        ? 'Supabase direct'
+                : dbUrl                    ? 'Postgres'
+                :                            'NO DATABASE_URL SET';
     console.log(`✅ Atom App Module loaded (NODE_ENV=${process.env.NODE_ENV ?? 'development'}, DB=${mode})`);
   }
 }
