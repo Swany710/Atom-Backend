@@ -225,7 +225,7 @@ describe('VoiceController', () => {
 
   describe('GET /api/v1/ai/conversations/:id', () => {
     it('returns messages array from memory service', async () => {
-      const result = await controller.getConversation('conv-abc');
+      const result = await controller.getConversation('conv-abc', { atomUserId: 'conv-abc' });
       expect(mockMemory.getRawMessages).toHaveBeenCalledWith('conv-abc');
       expect(result.conversationId).toBe('conv-abc');
       expect(result.messageCount).toBe(1);
@@ -234,7 +234,7 @@ describe('VoiceController', () => {
 
   describe('DELETE /api/v1/ai/conversations/:id', () => {
     it('calls clearSession and returns confirmation', async () => {
-      const result = await controller.clearConversation('conv-abc');
+      const result = await controller.clearConversation('conv-abc', { atomUserId: 'conv-abc' });
       expect(mockMemory.clearSession).toHaveBeenCalledWith('conv-abc');
       expect(result.message).toBe('Conversation cleared');
       expect(result.conversationId).toBe('conv-abc');

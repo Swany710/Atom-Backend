@@ -7,6 +7,7 @@ import {
   UploadedFile,
   UseInterceptors,
   BadRequestException,
+  ForbiddenException,
   HttpException,
   HttpStatus,
   Query,
@@ -254,15 +255,31 @@ export class VoiceController {
   }
 
   // ── Conversation history ──────────────────────────────────────────────────
+  //
+  // Ownership rule: a session ID is always either:
+  //   a) exactly the user's UUID (userId === sessionId), or
+  //   b) a compound key starting with the userId (e.g. userId + ':' + topic)
+  //
+  // Either way, the sessionId must start with the requesting user's ID.
+  // This prevents user A from reading or clearing user B's sessions.
+
+  private assertSessionOwnership(sessionId: string, req: any): void {
+    const userId = this.userId(req);
+    if (!sessionId.startsWith(userId)) {
+      throw new ForbiddenException('You do not have access to this conversation');
+    }
+  }
 
   @Get('conversations/:id')
-  async getConversation(@Param('id') id: string) {
+  async getConversation(@Param('id') id: string, @Req() req: any) {
+    this.assertSessionOwnership(id, req);
     const messages = await this.memory.getRawMessages(id);
     return { conversationId: id, messages, messageCount: messages.length };
   }
 
   @Delete('conversations/:id')
-  async clearConversation(@Param('id') id: string) {
+  async clearConversation(@Param('id') id: string, @Req() req: any) {
+    this.assertSessionOwnership(id, req);
     await this.memory.clearSession(id);
     return { message: 'Conversation cleared', conversationId: id };
   }

@@ -1,11 +1,25 @@
-// src/ai/chat-memory.entity.ts
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  CreateDateColumn,
+  Index,
+} from 'typeorm';
 
-@Entity()
+/**
+ * ChatMemory — stores the rolling conversation history for each session.
+ *
+ * Schema notes:
+ *   - UUID primary key (matches the migration DDL — do NOT change to serial/number)
+ *   - Explicit table name 'chat_memory' so TypeORM never auto-derives a different name
+ *   - sessionId is indexed for fast per-session queries
+ */
+@Entity('chat_memory')
 export class ChatMemory {
-  @PrimaryGeneratedColumn()
-  id: number;
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
 
+  @Index()
   @Column()
   sessionId: string;
 
@@ -15,6 +29,6 @@ export class ChatMemory {
   @Column({ type: 'text' })
   content: string;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 }
