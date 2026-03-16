@@ -3,10 +3,8 @@ import {
   UploadedFile, UseInterceptors, BadRequestException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { Public } from '../decorators/public.decorator';
 import { KnowledgeBaseService } from './knowledge-base.service';
 
-@Public()
 @Controller('api/v1/knowledge-base')
 export class KnowledgeBaseController {
   constructor(private readonly kb: KnowledgeBaseService) {}

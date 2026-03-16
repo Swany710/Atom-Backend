@@ -1,8 +1,10 @@
-import { Controller, Get, Post, Body, Query, Param } from '@nestjs/common';
-import { Public } from '../../decorators/public.decorator';
+import { Req, Controller, Get, Post, Body, Query, Param } from '@nestjs/common';
+
+import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { AccuLynxService } from './acculynx.service';
 
-@Public()
+@ApiBearerAuth('bearer')
+@ApiTags('CRM')
 @Controller('api/v1/integrations/crm')
 export class AccuLynxController {
   constructor(private readonly crm: AccuLynxService) {}

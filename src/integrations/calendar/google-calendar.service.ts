@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { decryptToken } from '../../crypto.util';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -55,8 +56,8 @@ export class GoogleCalendarService {
 
     const auth = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
     auth.setCredentials({
-      refresh_token: conn.refreshToken,
-      access_token:  conn.accessToken,
+      refresh_token: conn.refreshToken ? decryptToken(conn.refreshToken) : undefined,
+      access_token:  decryptToken(conn.accessToken),
     });
     return auth;
   }
