@@ -13,6 +13,7 @@ process.on('uncaughtException', (err) => {
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  console.log('APP BOOTSTRAPPED');
 
   // ── CORS ─────────────────────────────────────────────────────────────────
   // ALLOWED_ORIGINS = comma-separated list of allowed origins, or '*' for open.
