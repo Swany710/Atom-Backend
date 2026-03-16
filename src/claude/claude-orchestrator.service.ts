@@ -40,12 +40,20 @@ export class ClaudeOrchestratorService {
 
   // -- System prompt -------------------------------------------------------
 
-  get systemPrompt(): string {
+  /**
+   * Build the system prompt, optionally injecting the currently-active
+   * pending action so the LLM never has to guess which "yes" applies to.
+   */
+  buildSystemPrompt(activePending?: { id: string; summary: string } | null): string {
     const today = new Date().toLocaleDateString('en-US', {
       weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
     });
 
-    return `You are Atom, an AI personal assistant for a roofing and contracting business. You are proactive, organized, and operate like a world-class executive assistant. Today is ${today}.
+    const pendingBlock = activePending
+      ? `\n\nACTIVE PENDING ACTION (awaiting confirmation right now):\n  pendingActionId: ${activePending.id}\n  summary: ${activePending.summary}\nIf the user says yes/confirm/proceed/sure/go ahead, call the same tool again with this pendingActionId immediately.`
+      : '';
+
+    return `You are Atom, an AI personal assistant for a roofing and contracting business. You are proactive, organized, and operate like a world-class executive assistant. Today is ${today}. All times are in Central Time (CT) unless the user specifies otherwise.
 
 You have full access to the user's:
   - Gmail - read, search, summarize, reply, send, draft, delete, archive, mark read/unread
@@ -59,7 +67,7 @@ HOW TO BEHAVE AS A PERSONAL ASSISTANT
 - When asked to "prioritize my day", check BOTH calendar and email, then give a clear, ordered action plan.
 - When summarizing, always include: sender, subject, key ask, and urgency level.
 - When searching email, use smart Gmail query syntax (from:, subject:, is:unread, after:, etc.).
-- For calendar, always confirm timezone and show full event details.
+- For calendar, always default to Central Time (CT) for all event times.
 - Chain tools together. e.g. "What's on my plate?" --> check calendar + read emails + summarize everything.
 - If the user says something vague, interpret it helpfully and do the most useful thing.
 
@@ -69,11 +77,59 @@ WITHOUT pendingActionId, the backend returns:
   { requiresConfirmation: true, pendingActionId: "<id>", summary: "...", expiresAt: "..." }
 
 When you receive requiresConfirmation:
-1. Present the summary to the user: "Here's what I'm about to do: [summary]. Confirm?"
+1. Present the summary to the user clearly: "Here's what I'm about to do: [summary]. Shall I proceed?"
 2. When the user confirms, call the SAME tool again with pendingActionId set to the id you received.
 3. The backend will execute the action and return the real result.
 
-READ-ONLY tools (search, read, get, check, list) execute immediately - no confirmation needed.`.trim();
+READ-ONLY tools (search, read, get, check, list) execute immediately - no confirmation needed.
+
+CONFIRMATION DISAMBIGUATION - CRITICAL RULE:
+"Yes", "ok", "proceed", "confirm", "go ahead", "do it", "sure", "please", "yep", "yeah" and
+similar affirmative words ALWAYS refer to YOUR MOST RECENT question or pending action.
+NEVER apply a "yes" to an earlier turn in the conversation history.
+Look at your very last message — that is what the user is confirming.
+If your last message asked "Shall I delete 20 PetSmart emails?", then "yes" = delete those emails.
+If your last message asked about a calendar event, then "yes" = confirm that event.
+Do NOT reach back to earlier conversation turns when processing a confirmation.${pendingBlock}`.trim();
+  }
+
+  /** Legacy getter — delegates to buildSystemPrompt() with no active pending. */
+  get systemPrompt(): string {
+    return this.buildSystemPrompt(null);
+  }
+
+  // -- Helper: extract most recent active pending action from history --------
+
+  /**
+   * Scan the last 8 messages for the most recent tool_result that contains
+   * { requiresConfirmation: true, pendingActionId: "..." }.
+   *
+   * This lets us inject the active pendingActionId directly into the system
+   * prompt so the LLM never has to guess which "yes" belongs to.
+   */
+  private extractActivePending(
+    history: MessageParam[],
+  ): { id: string; summary: string } | null {
+    const recent = history.slice(-8);
+    for (let i = recent.length - 1; i >= 0; i--) {
+      const msg = recent[i];
+      if (msg.role === 'user' && Array.isArray(msg.content)) {
+        for (const block of msg.content as any[]) {
+          if (block.type === 'tool_result' && typeof block.content === 'string') {
+            try {
+              const parsed = JSON.parse(block.content);
+              if (parsed.requiresConfirmation === true && parsed.pendingActionId) {
+                return {
+                  id:      parsed.pendingActionId as string,
+                  summary: (parsed.summary as string) ?? 'pending action',
+                };
+              }
+            } catch { /* skip unparseable blocks */ }
+          }
+        }
+      }
+    }
+    return null;
   }
 
   // -- Standard (non-streaming) path --------------------------------------
@@ -94,11 +150,14 @@ READ-ONLY tools (search, read, get, check, list) execute immediately - no confir
     const tools = this.toolDefs.getTools();
     const toolCallsExecuted: Array<{ tool: string; args: unknown; result: unknown }> = [];
 
+    const activePending = this.extractActivePending(history);
+    const systemMsg = this.buildSystemPrompt(activePending);
+
     let response = await providerAI(
       () => this.anthropic.messages.create({
         model: ClaudeOrchestratorService.MODEL,
         max_tokens: 1024,
-        system: this.systemPrompt,
+        system: systemMsg,
         messages,
         tools,
       }),
@@ -144,7 +203,7 @@ READ-ONLY tools (search, read, get, check, list) execute immediately - no confir
         () => this.anthropic.messages.create({
           model: ClaudeOrchestratorService.MODEL,
           max_tokens: 1024,
-          system: this.systemPrompt,
+          system: systemMsg,
           messages,
           tools,
         }),
@@ -205,11 +264,14 @@ READ-ONLY tools (search, read, get, check, list) execute immediately - no confir
     const toolCallsExecuted: Array<{ tool: string; args: unknown; result: unknown }> = [];
 
     // Phase 1: tool-use loop (non-streaming)
+    const activePending = this.extractActivePending(history);
+    const systemMsg = this.buildSystemPrompt(activePending);
+
     let response = await providerAI(
       () => this.anthropic.messages.create({
         model: ClaudeOrchestratorService.MODEL,
         max_tokens: 1024,
-        system: this.systemPrompt,
+        system: systemMsg,
         messages,
         tools,
       }),
@@ -247,7 +309,7 @@ READ-ONLY tools (search, read, get, check, list) execute immediately - no confir
         () => this.anthropic.messages.create({
           model: ClaudeOrchestratorService.MODEL,
           max_tokens: 1024,
-          system: this.systemPrompt,
+          system: systemMsg,
           messages,
           tools,
         }),
@@ -262,7 +324,7 @@ READ-ONLY tools (search, read, get, check, list) execute immediately - no confir
       const stream = this.anthropic.messages.stream({
         model: ClaudeOrchestratorService.MODEL,
         max_tokens: 1024,
-        system: this.systemPrompt,
+        system: systemMsg,
         messages,
         tools,
       });
