@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+﻿import { Injectable, Logger } from '@nestjs/common';
 import { ClaudeOrchestratorService } from '../claude/claude-orchestrator.service';
 import { OpenAiTranscriptionService } from '../transcription/openai-transcription.service';
 import { ConversationMemoryService } from '../conversations/conversation-memory.service';
@@ -12,19 +12,19 @@ export interface ProcessResult {
 }
 
 /**
- * VoiceService — public facade consumed by VoiceController.
+ * VoiceService - public facade consumed by VoiceController.
  *
- * ┌─────────────────────────────────────────────────────┐
- * │  Text pipeline                                      │
- * │    user text  →  Claude  →  text reply              │
- * └─────────────────────────────────────────────────────┘
+ * +---------------------------------------------------------+
+ * |  Text pipeline                                          |
+ * |    user text --> Claude --> text reply                  |
+ * +---------------------------------------------------------+
  *
- * ┌─────────────────────────────────────────────────────┐
- * │  Voice pipeline                                     │
- * │    audio  →  OpenAI Whisper (STT)                   │
- * │           →  Claude  (reasoning + tools)            │
- * │           →  OpenAI TTS  →  audio/mpeg reply        │
- * └─────────────────────────────────────────────────────┘
+ * +---------------------------------------------------------+
+ * |  Voice pipeline                                         |
+ * |    audio --> OpenAI Whisper (STT)                       |
+ * |           --> Claude  (reasoning + tools)               |
+ * |           --> OpenAI TTS --> audio/mpeg reply           |
+ * +---------------------------------------------------------+
  */
 @Injectable()
 export class VoiceService {
@@ -36,7 +36,7 @@ export class VoiceService {
     private readonly memory: ConversationMemoryService,
   ) {}
 
-  // ── Text pipeline ─────────────────────────────────────────────────────────
+  // ── Text pipeline ────────────────────────────────────────────────────────────
 
   async processTextCommand(
     message: string,
@@ -67,7 +67,7 @@ export class VoiceService {
     return response;
   }
 
-  // ── Voice pipeline ────────────────────────────────────────────────────────
+  // ── Voice pipeline ───────────────────────────────────────────────────────────
 
   async processVoiceCommand(
     audioBuffer: Buffer,
@@ -75,21 +75,38 @@ export class VoiceService {
     conversationId?: string,
     mimeType?: string,
   ): Promise<ProcessResult> {
-    // Step 1 — STT: audio → transcription (OpenAI Whisper)
-    const transcribed = await this.transcription.transcribe(audioBuffer, mimeType);
-
-    // Step 2 — Reasoning: transcription → reply (Claude)
     const sessionId = conversationId ?? userId;
+    const fullStart = Date.now();
+
+    // ── Step 1: STT — audio → transcription (OpenAI Whisper) ─────────────────
+    const sttStart = Date.now();
+    const transcribed = await this.transcription.transcribe(audioBuffer, mimeType);
+    const sttMs = Date.now() - sttStart;
+    this.logger.log(`[LATENCY] STT: ${sttMs}ms | session=${sessionId}`);
+
+    // ── Step 2: LLM — transcription → reply (Claude) ──────────────────────────
+    const llmStart = Date.now();
     const { response: reply, toolCalls, newMessages } = await this.orchestrator.runChat(
       sessionId,
       transcribed,
       userId,
     );
+    const llmMs = Date.now() - llmStart;
+    this.logger.log(`[LATENCY] LLM: ${llmMs}ms | session=${sessionId} | tools=${toolCalls.length}`);
 
     await this.memory.appendMessages(sessionId, newMessages);
 
-    // Step 3 — TTS: reply → audio/mpeg (OpenAI TTS)
+    // ── Step 3: TTS — reply → audio/mpeg (OpenAI TTS) ────────────────────────
+    const ttsStart = Date.now();
     const audioResponse = await this.transcription.synthesise(reply);
+    const ttsMs = Date.now() - ttsStart;
+    this.logger.log(`[LATENCY] TTS: ${ttsMs}ms | session=${sessionId}`);
+
+    // ── Full request summary ──────────────────────────────────────────────────
+    const fullMs = Date.now() - fullStart;
+    this.logger.log(
+      `[LATENCY] FULL REQUEST: ${fullMs}ms | STT=${sttMs}ms LLM=${llmMs}ms TTS=${ttsMs}ms | session=${sessionId}`,
+    );
 
     return {
       response:       reply,
@@ -100,7 +117,7 @@ export class VoiceService {
     };
   }
 
-  // ── TTS only ──────────────────────────────────────────────────────────────
+  // ── TTS only ─────────────────────────────────────────────────────────────────
 
   async generateSpeech(
     text: string,
