@@ -4,11 +4,12 @@ import { TranscriptionModule } from '../transcription/transcription.module';
 import { ClaudeModule } from '../claude/claude.module';
 import { VoiceController } from './voice.controller';
 import { VoiceService } from './voice.service';
+import { VoiceOrchestratorService } from './voice-orchestrator.service';
 
 @Module({
   imports: [ConversationsModule, TranscriptionModule, ClaudeModule],
   controllers: [VoiceController],
-  providers: [VoiceService],
-  exports: [VoiceService],
+  providers: [VoiceOrchestratorService, VoiceService],
+  exports: [VoiceService, VoiceOrchestratorService],
 })
 export class VoiceModule {}
