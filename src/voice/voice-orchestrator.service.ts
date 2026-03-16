@@ -58,20 +58,41 @@ export class VoiceOrchestratorService {
   ): Promise<ProcessResult> {
     const sessionId = conversationId ?? userId;
 
-    const { response: reply, toolCalls, newMessages } = await this.orchestrator.runChat(
-      sessionId,
-      message,
-      userId,
-      correlationId,
-    );
-
-    await this.memory.appendMessages(sessionId, newMessages);
-
-    return {
-      response:       reply,
-      conversationId: sessionId,
-      toolCalls:      toolCalls.length > 0 ? toolCalls : undefined,
+    const runOnce = async () => {
+      const { response: reply, toolCalls, newMessages } = await this.orchestrator.runChat(
+        sessionId,
+        message,
+        userId,
+        correlationId,
+      );
+      await this.memory.appendMessages(sessionId, newMessages);
+      return {
+        response:       reply,
+        conversationId: sessionId,
+        toolCalls:      toolCalls.length > 0 ? toolCalls : undefined,
+      };
     };
+
+    try {
+      return await runOnce();
+    } catch (err) {
+      // If Anthropic rejects due to corrupt conversation history (orphaned tool_use blocks
+      // that sanitizeHistory missed), clear the session and retry once with a clean slate.
+      const msg = err instanceof Error ? err.message : String(err);
+      const isHistoryCorrupt =
+        msg.includes('tool_use') ||
+        (msg.includes('400') && msg.includes('invalid_request_error'));
+
+      if (isHistoryCorrupt) {
+        this.logger.warn(
+          `[${sessionId}] Anthropic rejected due to corrupt history – clearing session and retrying`,
+        );
+        await this.memory.clearSession(sessionId);
+        return await runOnce();
+      }
+
+      throw err;
+    }
   }
 
   async processPrompt(prompt: string, sessionId: string): Promise<string> {

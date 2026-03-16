@@ -85,20 +85,54 @@ export class ConversationMemoryService {
     let msgs = [...messages];
     let changed = false;
 
-    // Keep trimming the tail until it's clean
-    let safety = 20; // prevent infinite loop
+    // ── Phase 1: Forward pass across all message pairs ────────────────────
+    // An assistant message with tool_use blocks MUST be immediately followed
+    // by a user message with matching tool_result blocks. If not, truncate
+    // history at that point (preserve all clean messages before it).
+    for (let i = 0; i < msgs.length; i++) {
+      const msg = msgs[i];
+      if (msg.role !== 'assistant') continue;
+
+      const content = Array.isArray(msg.content) ? msg.content : [];
+      const toolUseBlocks = content.filter((b: any) => b.type === 'tool_use');
+      if (toolUseBlocks.length === 0) continue;
+
+      // This assistant message has tool_use blocks – verify next message is a matching tool_result
+      const next = msgs[i + 1];
+      let isValid = false;
+      if (next && next.role === 'user') {
+        const nextContent = Array.isArray(next.content) ? next.content : [];
+        const resultIds = new Set(
+          nextContent
+            .filter((b: any) => b.type === 'tool_result')
+            .map((b: any) => b.tool_use_id),
+        );
+        isValid = toolUseBlocks.every((b: any) => resultIds.has(b.id));
+      }
+
+      if (!isValid) {
+        this.logger.warn(
+          `[${sessionId}] Truncating history at message ${i}: orphaned tool_use (no matching tool_result follows)`,
+        );
+        msgs = msgs.slice(0, i);
+        changed = true;
+        break;
+      }
+    }
+
+    // ── Phase 2: Tail-trim any residual corrupt state ─────────────────────
+    let safety = 20;
     while (safety-- > 0) {
       const len = msgs.length;
       if (len === 0) break;
 
       const last = msgs[len - 1];
 
-      // ── Case A: last message is assistant with unresolved tool_use ──────────
+      // Case A: last message is assistant with unresolved tool_use
       if (last.role === 'assistant') {
         const content = Array.isArray(last.content) ? last.content : [];
         const hasToolUse = content.some((b: any) => b.type === 'tool_use');
         if (hasToolUse) {
-          // There's no user tool_result following it — this turn was interrupted
           this.logger.warn(
             `[${sessionId}] Dropping orphaned assistant tool_use at tail (interrupted turn)`,
           );
@@ -108,12 +142,11 @@ export class ConversationMemoryService {
         }
       }
 
-      // ── Case B: last message is user with unmatched tool_result ──────────
+      // Case B: last message is user with unmatched tool_result
       if (last.role === 'user') {
         const content = Array.isArray(last.content) ? last.content : [];
         const hasToolResult = content.some((b: any) => b.type === 'tool_result');
         if (hasToolResult) {
-          // Verify there's a preceding assistant message with matching tool_use ids
           const prevAssistant = msgs.slice(0, len - 1).reverse().find(m => m.role === 'assistant');
           const prevContent = prevAssistant && Array.isArray(prevAssistant.content)
             ? prevAssistant.content
@@ -143,27 +176,22 @@ export class ConversationMemoryService {
       break;
     }
 
-    // ── Final rule: history must not end on a user message ─────────────────
-    // The caller is about to append a new user message — if history already
-    // ends with one, Anthropic rejects the request with "two user messages in a row".
+    // ── Final rule: history must not end on a tool_result user message ─────
     while (msgs.length > 0 && msgs[msgs.length - 1].role === 'user') {
       const content = msgs[msgs.length - 1].content;
       const isToolResult = Array.isArray(content) &&
         content.some((b: any) => b.type === 'tool_result');
       if (isToolResult) {
-        // Already handled above; shouldn't reach here, but be safe
         msgs = msgs.slice(0, -1);
         changed = true;
       } else {
-        // Plain user text at tail — keep it, the API handles consecutive user turns
-        // by treating them as one combined message; don't strip real conversation
         break;
       }
     }
 
     if (changed) {
       this.logger.log(
-        `[${sessionId}] History sanitized: ${messages.length} → ${msgs.length} messages`,
+        `[${sessionId}] History sanitized: ${messages.length} -> ${msgs.length} messages`,
       );
     }
 
