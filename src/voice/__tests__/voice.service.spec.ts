@@ -1,11 +1,16 @@
 /**
- * VoiceService — conversation-memory persistence tests
+ * VoiceOrchestratorService — pipeline behaviour tests
  *
- * Verifies that VoiceService correctly delegates memory persistence to
- * ConversationMemoryService.appendMessages() after every turn.
+ * Verifies that VoiceOrchestratorService correctly:
+ *   - delegates to ClaudeOrchestratorService for LLM calls
+ *   - calls OpenAiTranscriptionService for STT/TTS
+ *   - persists conversation history via ConversationMemoryService
+ *
+ * (Previously this file tested VoiceService directly. VoiceService is now a
+ *  thin facade over VoiceOrchestratorService, so the substantive tests live here.)
  */
 
-import { VoiceService } from '../voice.service';
+import { VoiceOrchestratorService } from '../voice-orchestrator.service';
 import { ClaudeOrchestratorService } from '../../claude/claude-orchestrator.service';
 import { OpenAiTranscriptionService } from '../../transcription/openai-transcription.service';
 import { ConversationMemoryService } from '../../conversations/conversation-memory.service';
@@ -54,9 +59,9 @@ function buildService(
   orchestrator = makeOrchestratorMock(),
   transcription = makeTranscriptionMock(),
   memory        = makeMemoryMock(),
-): VoiceService {
-  return new VoiceService(
-    orchestrator as unknown as ClaudeOrchestratorService,
+): VoiceOrchestratorService {
+  return new VoiceOrchestratorService(
+    orchestrator  as unknown as ClaudeOrchestratorService,
     transcription as unknown as OpenAiTranscriptionService,
     memory        as unknown as ConversationMemoryService,
   );
@@ -64,7 +69,7 @@ function buildService(
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-describe('VoiceService — conversation-memory persistence', () => {
+describe('VoiceOrchestratorService — conversation-memory persistence', () => {
 
   // ── processTextCommand ────────────────────────────────────────────────────
 
