@@ -62,6 +62,7 @@ interface MulterFile {
  *   POST   /api/v1/ai/voice
  *   POST   /api/v1/ai/voice-command   (legacy — kept for frontend backwards compat)
  *   POST   /api/v1/ai/speak
+ *   POST   /api/v1/ai/sync-turn       (save a realtime voice turn to backend memory)
  *   GET    /api/v1/ai/conversations/:id
  *   DELETE /api/v1/ai/conversations/:id
  */
@@ -252,6 +253,35 @@ export class VoiceController {
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
+  }
+
+  // ── Sync realtime voice turn to backend session memory ────────────────────
+  //
+  // Called by the frontend after each OpenAI Realtime turn completes so that
+  // switching from voice to text carries the full conversation context.
+  // This is fire-and-forget from the frontend's perspective (errors are logged
+  // but don't interrupt the voice session).
+
+  @Public()
+  @Post('sync-turn')
+  async syncRealtimeTurn(
+    @Body() body: { userMessage?: string; assistantMessage?: string; conversationId?: string },
+    @Req() req: any,
+  ): Promise<{ conversationId: string }> {
+    const userId    = this.userId(req);
+    const sessionId = body.conversationId ?? userId;
+
+    const msgs: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+    if (body.userMessage?.trim())
+      msgs.push({ role: 'user',      content: body.userMessage.trim() });
+    if (body.assistantMessage?.trim())
+      msgs.push({ role: 'assistant', content: body.assistantMessage.trim() });
+
+    if (msgs.length) {
+      await this.memory.appendMessages(sessionId, msgs as any);
+    }
+
+    return { conversationId: sessionId };
   }
 
   // ── Conversation history ──────────────────────────────────────────────────
