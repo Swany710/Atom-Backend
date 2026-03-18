@@ -33,6 +33,7 @@ export class HealthController {
       status: 'ok',
       timestamp: new Date().toISOString(),
       uptime: Math.floor(process.uptime()),
+      version: '1.1.0',
     };
   }
 
