@@ -11,9 +11,16 @@ import { EmailProviderName } from './email.types';
 /**
  * OAuth flow endpoints for email providers.
  *
- * ALL endpoints are @Public() — the static frontend sends no Authorization header.
- * userId is resolved server-side: req.atomUserId (set by ApiKeyGuard when a JWT/API-key
- * IS present) falls back to OWNER_USER_ID env var, then 'owner'.
+ * Most endpoints require a valid JWT (set in Authorization: Bearer header by the
+ * proxy when the frontend sends X-Atom-Token). This ensures each user only sees
+ * and manages their own email connections.
+ *
+ * The ONLY exception is handleCallback() which MUST remain @Public() because
+ * Google/Microsoft redirect to it directly — they cannot include our auth header.
+ * The userId is recovered securely from the signed HMAC state embedded in the URL.
+ *
+ * userId is resolved server-side: req.atomUserId (set by ApiKeyGuard from the JWT)
+ * falls back to OWNER_USER_ID env var, then 'owner' for backwards-compat in dev.
  */
 @ApiTags('Email')
 @Controller('email/oauth')
@@ -34,8 +41,7 @@ export class EmailOAuthController {
     );
   }
 
-  /** Generate an authorization URL for any supported provider. userId resolved server-side only. */
-  @Public()
+  /** Generate an authorization URL for any supported provider. Requires JWT auth. */
   @Get('url')
   getAuthUrl(
     @Req() req: any,
@@ -125,8 +131,7 @@ export class EmailOAuthController {
     return res.status(HttpStatus.OK).send(html);
   }
 
-  /** Generic connection status for any provider. userId resolved server-side only. */
-  @Public()
+  /** Generic connection status for any provider. Requires JWT auth. */
   @Get('status')
   async getStatus(
     @Req() req: any,
@@ -137,9 +142,8 @@ export class EmailOAuthController {
 
   /**
    * Enriched Gmail status for the settings panel.
-   * userId resolved server-side only.
+   * Requires JWT auth — returns status for the requesting user only.
    */
-  @Public()
   @Get('gmail-status')
   async getGmailStatus(@Req() req: any) {
     const userId: string = this.userId(req);
@@ -159,9 +163,8 @@ export class EmailOAuthController {
 
   /**
    * Enriched Outlook/Microsoft status for the settings panel.
-   * userId resolved server-side only.
+   * Requires JWT auth — returns status for the requesting user only.
    */
-  @Public()
   @Get('outlook-status')
   async getOutlookStatus(@Req() req: any) {
     const userId: string = this.userId(req);
@@ -180,10 +183,9 @@ export class EmailOAuthController {
   }
 
   /**
-   * Disconnect a stored OAuth connection. userId resolved server-side only.
+   * Disconnect a stored OAuth connection. Requires JWT auth.
    * DELETE /email/oauth/disconnect?provider=gmail|outlook
    */
-  @Public()
   @Delete('disconnect')
   async disconnect(
     @Req() req: any,
