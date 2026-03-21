@@ -9,6 +9,7 @@ import { ToolDefinitionsService } from './tool-definitions.service';
 import { PendingActionService, ConfirmationRequired } from '../pending-actions/pending-action.service';
 import { AuditService } from '../audit/audit.service';
 import { providerRead, providerWrite } from '../utils/provider-call';
+import { ScheduledTaskService } from '../scheduled-tasks/scheduled-task.service';
 
 /**
  * ToolExecutionService
@@ -50,6 +51,7 @@ export class ToolExecutionService {
     private readonly toolDefs: ToolDefinitionsService,
     private readonly pendingActions: PendingActionService,
     private readonly audit: AuditService,
+    private readonly scheduledTasks: ScheduledTaskService,
     @Inject(EMAIL_PROVIDER)
     private readonly emailService: IEmailService,
   ) {}
@@ -361,6 +363,54 @@ export class ToolExecutionService {
           info:  'No additional information needed. Answer based on general knowledge.',
           query: args.query,
         };
+
+      // ── Scheduled Tasks ─────────────────────────────────────────
+      case 'schedule_task': {
+        const scheduledAt = new Date(args.scheduledAt as string);
+        if (isNaN(scheduledAt.getTime())) {
+          return { error: 'Invalid scheduledAt datetime. Use ISO 8601 format.' };
+        }
+        if (scheduledAt <= new Date()) {
+          return { error: 'scheduledAt must be in the future.' };
+        }
+        const task = await this.scheduledTasks.create({
+          userId:      userId,
+          taskType:    args.taskType as string,
+          description: args.description as string,
+          scheduledAt,
+          args:        args.args as Record<string, unknown>,
+        });
+        return {
+          success:     true,
+          taskId:      task.id,
+          description: task.description,
+          scheduledAt: task.scheduledAt.toISOString(),
+          message:     `Scheduled: "${task.description}" for ${task.scheduledAt.toLocaleString('en-US', { timeZone: 'America/Chicago', weekday: 'long', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' })}`,
+        };
+      }
+
+      case 'list_scheduled_tasks': {
+        const pendingOnly = args.pendingOnly as boolean | undefined;
+        const tasks = pendingOnly
+          ? await this.scheduledTasks.listPending(userId)
+          : await this.scheduledTasks.list(userId);
+        return {
+          tasks: tasks.map(t => ({
+            id:          t.id,
+            taskType:    t.taskType,
+            description: t.description,
+            scheduledAt: t.scheduledAt.toISOString(),
+            status:      t.status,
+            resultSummary: t.resultSummary,
+          })),
+          count: tasks.length,
+        };
+      }
+
+      case 'cancel_scheduled_task': {
+        const result = await this.scheduledTasks.cancel(args.taskId as string, userId);
+        return result;
+      }
 
       default:
         this.logger.warn(`Unknown tool called: ${toolName}`);

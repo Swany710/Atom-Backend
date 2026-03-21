@@ -5,11 +5,12 @@ import { CrmModule } from '../integrations/crm/crm.module';
 import { KnowledgeBaseModule } from '../knowledge-base/knowledge-base.module';
 import { PendingActionModule } from '../pending-actions/pending-action.module';
 import { AuditModule } from '../audit/audit.module';
+import { ScheduledTasksModule } from '../scheduled-tasks/scheduled-tasks.module';
 import { ToolDefinitionsService } from './tool-definitions.service';
 import { ToolExecutionService } from './tool-execution.service';
 
 @Module({
-  imports: [CalendarModule, EmailModule, CrmModule, KnowledgeBaseModule, PendingActionModule, AuditModule],
+  imports: [CalendarModule, EmailModule, CrmModule, KnowledgeBaseModule, PendingActionModule, AuditModule, ScheduledTasksModule],
   providers: [ToolDefinitionsService, ToolExecutionService],
   exports: [ToolDefinitionsService, ToolExecutionService],
 })

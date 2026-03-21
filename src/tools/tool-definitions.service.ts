@@ -291,6 +291,74 @@ export class ToolDefinitionsService {
         },
       },
 
+      // ── Scheduled Tasks ─────────────────────────────────────────────
+      {
+        name: 'schedule_task',
+        description:
+          'Schedule a future action to be executed automatically at a specific date and time. ' +
+          'Use when the user says things like "send a reminder email at 3pm Friday", ' +
+          '"email the homeowner tomorrow morning", or "remind me to follow up on Monday". ' +
+          'Supported taskTypes: send_email. ' +
+          'scheduledAt must be an ISO 8601 datetime string (e.g. "2025-06-15T15:00:00-05:00"). ' +
+          'When the user mentions a day/time without a year, infer the next upcoming occurrence.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            taskType: {
+              type: 'string',
+              description: 'The type of action to schedule. Currently supported: send_email',
+            },
+            description: {
+              type: 'string',
+              description: 'Human-readable summary of the task, e.g. "Send reminder email to John Smith about roof inspection"',
+            },
+            scheduledAt: {
+              type: 'string',
+              description: 'ISO 8601 datetime when to execute the task, including timezone offset (e.g. "2025-06-15T15:00:00-05:00" for 3pm CT)',
+            },
+            args: {
+              type: 'object' as const,
+              description:
+                'Arguments for the task. For send_email: { to: string[], subject: string, body: string, cc?: string[] }',
+              properties: {
+                to:      { type: 'array', items: { type: 'string' }, description: 'Recipient email addresses' },
+                subject: { type: 'string', description: 'Email subject line' },
+                body:    { type: 'string', description: 'Email body (plain text)' },
+                cc:      { type: 'array', items: { type: 'string' }, description: 'CC recipients (optional)' },
+              },
+            },
+          },
+          required: ['taskType', 'description', 'scheduledAt', 'args'],
+        },
+      },
+      {
+        name: 'list_scheduled_tasks',
+        description:
+          'List all scheduled (future) tasks for the current user. ' +
+          'Use when the user asks "what do I have scheduled?", "show my reminders", or similar.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            pendingOnly: {
+              type: 'boolean',
+              description: 'If true, only return pending (not yet executed) tasks. Default false.',
+            },
+          },
+          required: [],
+        },
+      },
+      {
+        name: 'cancel_scheduled_task',
+        description: 'Cancel a pending scheduled task by its ID. Use when the user wants to remove or cancel a scheduled reminder.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            taskId: { type: 'string', description: 'The ID of the scheduled task to cancel' },
+          },
+          required: ['taskId'],
+        },
+      },
+
       // ── General ────────────────────────────────────────────────────
       {
         name: 'get_general_info',

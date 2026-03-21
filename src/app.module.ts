@@ -4,6 +4,7 @@ import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { JwtModule } from '@nestjs/jwt';
+import { ScheduleModule } from '@nestjs/schedule';
 import * as dns from 'dns';
 import { VoiceModule } from './voice/voice.module';
 import { EmailModule } from './integrations/email/email.module';
@@ -16,6 +17,7 @@ import { AuditModule } from './audit/audit.module';
 import { AuthModule } from './auth/auth.module';
 import { PendingActionModule } from './pending-actions/pending-action.module';
 import { MemoryModule } from './memory/memory.module';
+import { ScheduledTasksModule } from './scheduled-tasks/scheduled-tasks.module';
 import { CorrelationMiddleware } from './middleware/correlation.middleware';
 
 // Force Node.js to prefer IPv4 for ALL DNS lookups globally.
@@ -73,6 +75,8 @@ const isSupabase = (url?: string): boolean =>
 
     ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: 120 }]),
 
+    ScheduleModule.forRoot(),
+
     JwtModule.registerAsync({
       useFactory: () => ({
         secret:      process.env.JWT_SECRET ?? 'dev-jwt-secret-UNSAFE',
@@ -85,6 +89,7 @@ const isSupabase = (url?: string): boolean =>
     AuthModule,
     PendingActionModule,
     MemoryModule,
+    ScheduledTasksModule,
     VoiceModule,
     EmailModule,
     CalendarModule,
