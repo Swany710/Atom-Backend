@@ -57,14 +57,18 @@ interface MulterFile {
 /**
  * VoiceController — all AI + conversation endpoints.
  *
- *   GET    /api/v1/ai/health
- *   POST   /api/v1/ai/text
- *   POST   /api/v1/ai/voice
- *   POST   /api/v1/ai/voice-command   (legacy — kept for frontend backwards compat)
- *   POST   /api/v1/ai/speak
- *   POST   /api/v1/ai/sync-turn       (save a realtime voice turn to backend memory)
- *   GET    /api/v1/ai/conversations/:id
- *   DELETE /api/v1/ai/conversations/:id
+ * Auth: all endpoints require a valid Bearer token (JWT or API key) except
+ * GET /api/v1/ai/health which is @Public() for Railway health checks.
+ *
+ *   GET    /api/v1/ai/health           — @Public() liveness check
+ *   POST   /api/v1/ai/text             — requires auth
+ *   POST   /api/v1/ai/voice            — requires auth
+ *   POST   /api/v1/ai/voice-command    — requires auth (legacy — backwards compat)
+ *   POST   /api/v1/ai/speak            — requires auth
+ *   POST   /api/v1/ai/sync-turn        — requires auth
+ *   POST   /api/v1/ai/realtime-token   — requires auth
+ *   GET    /api/v1/ai/conversations/:id  — requires auth
+ *   DELETE /api/v1/ai/conversations/:id  — requires auth
  */
 @ApiTags('AI')
 @Controller('api/v1/ai')
@@ -96,7 +100,6 @@ export class VoiceController {
 
   // ── Text ──────────────────────────────────────────────────────────────────
 
-  @Public()
   @Post('text')
   async handleText(@Body() body: TextRequest, @Req() req: any): Promise<TextResponse> {
     if (!body?.message?.trim()) {
@@ -127,7 +130,6 @@ export class VoiceController {
 
   // ── Voice ─────────────────────────────────────────────────────────────────
 
-  @Public()
   @Post('voice')
   @UseInterceptors(FileInterceptor('audio'))
   async handleVoice(
@@ -189,7 +191,6 @@ export class VoiceController {
 
   // ── Legacy voice-command (backwards compat) ───────────────────────────────
 
-  @Public()
   @Post('voice-command')
   @UseInterceptors(FileInterceptor('audio'))
   async handleLegacyVoice(
@@ -235,7 +236,6 @@ export class VoiceController {
 
   // ── Speak (TTS only) ──────────────────────────────────────────────────────
 
-  @Public()
   @Post('speak')
   async speak(
     @Body('text') text: string,
@@ -262,7 +262,6 @@ export class VoiceController {
   // This is fire-and-forget from the frontend's perspective (errors are logged
   // but don't interrupt the voice session).
 
-  @Public()
   @Post('sync-turn')
   async syncRealtimeTurn(
     @Body() body: { userMessage?: string; assistantMessage?: string; conversationId?: string },
@@ -318,7 +317,6 @@ export class VoiceController {
   // Frontend requests a short-lived token so the OpenAI API key never
   // leaves the server. Token is valid for 60 seconds.
 
-  @Public()
   @Post('realtime-token')
   async getRealtimeToken(@Req() req: any) {
     const openaiKey = process.env.OPENAI_API_KEY;
