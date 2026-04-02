@@ -61,9 +61,14 @@ async function bootstrap() {
   });
 
   // ── Swagger / OpenAPI ─────────────────────────────────────────────────────
-  // Available at /api/docs in all environments.
-  // Set SWAGGER_ENABLED=false to disable in production if you prefer.
-  const swaggerEnabled = process.env.SWAGGER_ENABLED !== 'false';
+  // In production, Swagger is OFF by default — set SWAGGER_ENABLED=true to
+  // opt in (e.g. on a private staging deployment).
+  // In development, Swagger is ON by default — set SWAGGER_ENABLED=false to
+  // opt out.
+  // This prevents the full API surface from being publicly enumerable in prod.
+  const swaggerEnabled = isProd
+    ? process.env.SWAGGER_ENABLED === 'true'   // prod: must explicitly opt in
+    : process.env.SWAGGER_ENABLED !== 'false';  // dev:  must explicitly opt out
   if (swaggerEnabled) {
     const config = new DocumentBuilder()
       .setTitle('Atom Backend API')
