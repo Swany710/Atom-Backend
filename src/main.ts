@@ -3,6 +3,7 @@ import { AppModule } from './app.module';
 import { validateProductionEnv } from './config/env.validation';
 import { GlobalExceptionFilter } from './filters/global-exception.filter';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import helmet from 'helmet';
 
 // ── Run before anything else ──────────────────────────────────────────────
 // Exits the process immediately if required production env vars are missing.
@@ -41,6 +42,13 @@ async function bootstrap() {
 
   // ── Global exception filter ──────────────────────────────────────────────
   app.useGlobalFilters(new GlobalExceptionFilter());
+
+  // ── Security headers (Helmet) ─────────────────────────────────────────────
+  // Sets X-Content-Type-Options, X-Frame-Options, X-XSS-Protection,
+  // Strict-Transport-Security, Referrer-Policy, and more on every response.
+  // contentSecurityPolicy is disabled here because the backend serves only
+  // JSON API responses — CSP belongs on the frontend static server instead.
+  app.use(helmet({ contentSecurityPolicy: false }));
 
   const isProd = process.env.NODE_ENV === 'production';
 
