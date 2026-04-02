@@ -1,4 +1,5 @@
 import { NestFactory } from '@nestjs/core';
+import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
 import { validateProductionEnv } from './config/env.validation';
 import { GlobalExceptionFilter } from './filters/global-exception.filter';
@@ -49,6 +50,27 @@ async function bootstrap() {
   // contentSecurityPolicy is disabled here because the backend serves only
   // JSON API responses — CSP belongs on the frontend static server instead.
   app.use(helmet({ contentSecurityPolicy: false }));
+
+  // ── Global validation pipe ────────────────────────────────────────────────
+  // whitelist:true            — strips any request-body properties that have no
+  //                             matching decorator in the DTO class, preventing
+  //                             unexpected fields from reaching service logic.
+  // forbidNonWhitelisted:true — returns 400 Bad Request instead of silently
+  //                             stripping unknown fields, making rejections explicit.
+  // transform:true            — auto-coerces payloads to the declared DTO type
+  //                             (e.g. string "5" → number 5 where typed as number).
+  // enableImplicitConversion  — uses TypeScript metadata for type coercion without
+  //                             requiring explicit @Type() decorators on every field.
+  //
+  // Note: whitelist/forbidNonWhitelisted only take effect on endpoints whose DTOs
+  // are defined as classes with class-validator decorators. Endpoints still using
+  // plain interfaces are unaffected today but will be validated as DTOs are migrated.
+  app.useGlobalPipes(new ValidationPipe({
+    whitelist:             true,
+    forbidNonWhitelisted:  true,
+    transform:             true,
+    transformOptions:      { enableImplicitConversion: true },
+  }));
 
   const isProd = process.env.NODE_ENV === 'production';
 
