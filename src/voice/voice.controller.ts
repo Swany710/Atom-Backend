@@ -131,7 +131,7 @@ export class VoiceController {
   // ── Voice ─────────────────────────────────────────────────────────────────
 
   @Post('voice')
-  @UseInterceptors(FileInterceptor('audio'))
+  @UseInterceptors(FileInterceptor('audio', { limits: { fileSize: 25 * 1024 * 1024 } }))
   async handleVoice(
     @UploadedFile() file: MulterFile,
     @Response() res: ExpressResponse,
@@ -192,7 +192,7 @@ export class VoiceController {
   // ── Legacy voice-command (backwards compat) ───────────────────────────────
 
   @Post('voice-command')
-  @UseInterceptors(FileInterceptor('audio'))
+  @UseInterceptors(FileInterceptor('audio', { limits: { fileSize: 25 * 1024 * 1024 } }))
   async handleLegacyVoice(
     @UploadedFile() file: Express.Multer.File,
     @Req() req: any,
