@@ -16,10 +16,19 @@ import * as crypto from 'crypto';
 export class CorrelationMiddleware implements NestMiddleware {
   use(req: Request & { correlationId?: string }, res: Response, next: NextFunction) {
     const incoming = req.headers['x-correlation-id'];
-    const correlationId =
-      typeof incoming === 'string' && incoming.length > 0
-        ? incoming
-        : crypto.randomUUID();
+
+    // Sanitize to alphanumerics and hyphens only (UUID charset).
+    // This prevents log-injection attacks where a crafted header containing
+    // newlines, JSON metacharacters, or control characters could corrupt
+    // structured log output or spoof log entries.
+    // If the header is absent or becomes empty after sanitization, generate
+    // a fresh UUID instead.
+    const sanitized =
+      typeof incoming === 'string'
+        ? incoming.replace(/[^a-zA-Z0-9-]/g, '').slice(0, 64)
+        : '';
+
+    const correlationId = sanitized.length > 0 ? sanitized : crypto.randomUUID();
 
     req.correlationId = correlationId;
     res.setHeader('X-Correlation-Id', correlationId);
