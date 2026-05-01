@@ -106,10 +106,12 @@ OPENAI_API_KEY=
 ### Database
 
 ```bash
-DATABASE_URL=
-DATABASE_SSL=false
-SUPABASE_URL=
-SUPABASE_KEY=
+# Railway/Supabase: copy the exact Transaction pooler URL from
+# Supabase Dashboard -> Connect. The pooler host is region-specific.
+DATABASE_URL=postgresql://postgres.[PROJECT-REF]:[PASSWORD]@[POOLER-HOST]:6543/postgres
+DATABASE_SSL=true
+SUPABASE_URL=https://[PROJECT-REF].supabase.co
+SUPABASE_ANON_KEY=
 ```
 
 ### OAuth / Encryption

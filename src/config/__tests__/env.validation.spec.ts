@@ -5,7 +5,7 @@ function validProdEnv(): Record<string, string> {
     NODE_ENV:              'production',
     API_KEY:               'a'.repeat(32),
     ALLOWED_ORIGINS:       'https://app.example.com',
-    DATABASE_URL:          'postgres://localhost/test',
+    DATABASE_URL:          'postgres://user:pass@localhost/test',
     TOKEN_ENCRYPTION_KEY:  '0'.repeat(64),
     OAUTH_STATE_SECRET:    'b'.repeat(32),
     JWT_SECRET:            'c'.repeat(32),
@@ -78,6 +78,43 @@ describe('validateProductionEnv', () => {
   describe('production mode — valid baseline', () => {
     it('passes without calling process.exit when all vars are correct', () => {
       runValidation({});
+      expect(exitSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('DATABASE_URL validation', () => {
+    it('rejects malformed connection strings', () => {
+      runValidation({ DATABASE_URL: 'not-a-url' });
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    });
+
+    it('rejects placeholder connection strings', () => {
+      runValidation({
+        DATABASE_URL: 'postgresql://postgres.[PROJECT-REF]:[PASSWORD]@aws-0-us-east-1.pooler.supabase.com:6543/postgres',
+      });
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    });
+
+    it('rejects Supabase pooler URLs without project ref in the username', () => {
+      runValidation({
+        DATABASE_URL: 'postgresql://postgres:password@aws-0-us-east-1.pooler.supabase.com:6543/postgres',
+      });
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    });
+
+    it('rejects Supabase project ref mismatches when SUPABASE_URL is set', () => {
+      runValidation({
+        SUPABASE_URL: 'https://aaaaaaaaaaaaaaaaaaaa.supabase.co',
+        DATABASE_URL: 'postgresql://postgres.bbbbbbbbbbbbbbbbbbbb:password@aws-0-us-east-1.pooler.supabase.com:6543/postgres',
+      });
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    });
+
+    it('accepts a matching Supabase pooler URL', () => {
+      runValidation({
+        SUPABASE_URL: 'https://aaaaaaaaaaaaaaaaaaaa.supabase.co',
+        DATABASE_URL: 'postgresql://postgres.aaaaaaaaaaaaaaaaaaaa:password@aws-0-us-east-1.pooler.supabase.com:6543/postgres',
+      });
       expect(exitSpy).not.toHaveBeenCalled();
     });
   });
