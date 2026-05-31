@@ -5,6 +5,12 @@
   "compilerOptions": {
     "deleteOutDir": true,
     "webpack": false,
-    "tsConfigPath": "tsconfig.json"
+    "tsConfigPath": "tsconfig.json",
+    "assets": [
+      {
+        "include": "../public/**/*",
+        "outDir": "dist/public"
+      }
+    ]
   }
 }

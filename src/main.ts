@@ -5,6 +5,9 @@ import { validateProductionEnv } from './config/env.validation';
 import { GlobalExceptionFilter } from './filters/global-exception.filter';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
+import { existsSync } from 'fs';
+import { join } from 'path';
+import { static as serveStatic } from 'express';
 
 // ── Run before anything else ──────────────────────────────────────────────
 // Exits the process immediately if required production env vars are missing.
@@ -121,6 +124,17 @@ async function bootstrap() {
       swaggerOptions: { persistAuthorization: true },
     });
     console.log(`   Swagger docs: http://localhost:${process.env.PORT || 3000}/api/docs`);
+  }
+
+  // ── Static Atom web client ───────────────────────────────────────────────
+  // Serve the lightweight app shell used by operators to access text chat,
+  // live voice chat, and feature navigation directly from the backend host.
+  const publicDir = existsSync(join(process.cwd(), 'public'))
+    ? join(process.cwd(), 'public')
+    : join(__dirname, '..', 'public');
+  if (existsSync(publicDir)) {
+    app.use('/', serveStatic(publicDir, { extensions: ['html'] }));
+    console.log(`   Web client: http://localhost:${process.env.PORT || 3000}/`);
   }
 
   const port = process.env.PORT || 3000;
