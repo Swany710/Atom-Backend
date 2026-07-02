@@ -19,6 +19,7 @@ import { PendingActionModule } from './pending-actions/pending-action.module';
 import { MemoryModule } from './memory/memory.module';
 import { ScheduledTasksModule } from './scheduled-tasks/scheduled-tasks.module';
 import { CorrelationMiddleware } from './middleware/correlation.middleware';
+import { AdminModule } from './admin/admin.module';
 
 // Force Node.js to prefer IPv4 for ALL DNS lookups globally.
 // Railway containers cannot reach external IPv6 addresses (ENETUNREACH).
@@ -87,6 +88,7 @@ const isSupabase = (url?: string): boolean =>
     HealthModule,
     AuditModule,
     AuthModule,
+    AdminModule,
     PendingActionModule,
     MemoryModule,
     ScheduledTasksModule,

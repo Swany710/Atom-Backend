@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Atom Admin</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --surface2: #21262d;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-muted: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --yellow: #d29922;
+    --red: #f85149;
+    --purple: #bc8cff;
+    --orange: #e3b341;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; min-height: 100vh; }
+
+  /* ── Auth banner ── */
+  #auth-banner {
+    background: #1c2128;
+    border-bottom: 1px solid var(--border);
+    padding: 10px 24px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+  #auth-banner label { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
+  #auth-banner input {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 13px;
+    letter-spacing: 0.04em;
+    padding: 5px 10px;
+    outline: none;
+    width: 300px;
+  }
+  #auth-banner input:focus { border-color: var(--accent); }
+  #auth-btn {
+    background: var(--accent);
+    border: none;
+    border-radius: 6px;
+    color: #000;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 5px 14px;
+  }
+  #auth-btn:hover { opacity: 0.85; }
+  #auth-status { color: var(--text-muted); font-size: 12px; }
+
+  /* ── Header ── */
+  header {
+    padding: 16px 24px 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--border);
+  }
+  .logo { font-size: 20px; font-weight: 700; color: var(--accent); letter-spacing: -0.5px; }
+  .logo span { color: var(--text-muted); font-weight: 400; font-size: 13px; margin-left: 8px; }
+  #health-badge {
+    font-size: 12px;
+    padding: 3px 10px;
+    border-radius: 20px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .dot.green  { background: var(--green);  box-shadow: 0 0 6px var(--green); }
+  .dot.red    { background: var(--red);    box-shadow: 0 0 6px var(--red); }
+  .dot.yellow { background: var(--yellow); }
+  .dot.grey   { background: var(--text-muted); }
+
+  /* ── Nav tabs ── */
+  nav { display: flex; padding: 0 24px; border-bottom: 1px solid var(--border); gap: 2px; }
+  .tab {
+    background: none; border: none; border-bottom: 2px solid transparent;
+    color: var(--text-muted); cursor: pointer; font-size: 13px;
+    padding: 10px 14px; transition: color 0.15s;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active { border-bottom-color: var(--accent); color: var(--accent); }
+
+  /* ── Main ── */
+  main { padding: 20px 24px; max-width: 1400px; }
+  .section { display: none; }
+  .section.active { display: block; }
+
+  /* ── Stat cards ── */
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; margin-bottom: 24px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+  .card .label { color: var(--text-muted); font-size: 12px; margin-bottom: 8px; }
+  .card .value { font-size: 28px; font-weight: 700; }
+  .card .sub   { color: var(--text-muted); font-size: 11px; margin-top: 4px; }
+  .card.green  .value { color: var(--green); }
+  .card.yellow .value { color: var(--yellow); }
+  .card.red    .value { color: var(--red); }
+  .card.blue   .value { color: var(--accent); }
+  .card.purple .value { color: var(--purple); }
+
+  /* ── Section header ── */
+  .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  .section-header h2 { font-size: 16px; font-weight: 600; }
+  .refresh-btn {
+    background: var(--surface2); border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text-muted); cursor: pointer; font-size: 12px; padding: 4px 10px;
+  }
+  .refresh-btn:hover { color: var(--text); border-color: var(--accent); }
+
+  /* ── Tables ── */
+  .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; }
+  table { border-collapse: collapse; width: 100%; }
+  thead th {
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    color: var(--text-muted); font-size: 11px; font-weight: 600;
+    letter-spacing: 0.05em; padding: 8px 14px; text-align: left;
+    text-transform: uppercase; white-space: nowrap;
+  }
+  tbody tr { border-bottom: 1px solid var(--border); }
+  tbody tr:last-child { border-bottom: none; }
+  tbody tr:hover { background: var(--surface); }
+  tbody td { color: var(--text); font-size: 13px; padding: 10px 14px; vertical-align: top; }
+  .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; color: var(--text-muted); }
+  .truncate { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* ── Status pills ── */
+  .pill { border-radius: 12px; display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; white-space: nowrap; }
+  .pill.pending   { background: rgba(210,153,34,.15);  color: var(--yellow); border: 1px solid rgba(210,153,34,.3); }
+  .pill.confirmed { background: rgba(63,185,80,.15);   color: var(--green);  border: 1px solid rgba(63,185,80,.3); }
+  .pill.expired   { background: rgba(248,81,73,.15);   color: var(--red);    border: 1px solid rgba(248,81,73,.3); }
+  .pill.cancelled { background: rgba(139,148,158,.15); color: var(--text-muted); border: 1px solid var(--border); }
+  .pill.failed    { background: rgba(248,81,73,.15);   color: var(--red);    border: 1px solid rgba(248,81,73,.3); }
+  .pill.executed  { background: rgba(63,185,80,.15);   color: var(--green);  border: 1px solid rgba(63,185,80,.3); }
+  .pill.ok        { background: rgba(63,185,80,.15);   color: var(--green);  border: 1px solid rgba(63,185,80,.3); }
+  .pill.error     { background: rgba(248,81,73,.15);   color: var(--red);    border: 1px solid rgba(248,81,73,.3); }
+  .pill.user      { background: rgba(88,166,255,.12);  color: var(--accent); border: 1px solid rgba(88,166,255,.3); }
+  .pill.assistant { background: rgba(188,140,255,.12); color: var(--purple); border: 1px solid rgba(188,140,255,.3); }
+  .pill.verified  { background: rgba(63,185,80,.15);   color: var(--green);  border: 1px solid rgba(63,185,80,.3); }
+  .pill.unverified{ background: rgba(139,148,158,.15); color: var(--text-muted); border: 1px solid var(--border); }
+
+  /* ── Integration cards ── */
+  .integrations-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+  .int-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 18px; }
+  .int-card .int-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 4px; }
+  .int-card .int-name { font-size: 15px; font-weight: 600; }
+  .int-card .int-detail { color: var(--text-muted); font-size: 12px; margin-top: 4px; }
+  .int-card .int-icon { font-size: 24px; }
+
+  /* ── Filter bar ── */
+  .filter-bar { display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
+  .filter-bar select, .filter-bar input {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text); font-size: 13px; padding: 5px 10px; outline: none;
+  }
+  .filter-bar select:focus, .filter-bar input:focus { border-color: var(--accent); }
+  .filter-bar label { color: var(--text-muted); font-size: 12px; }
+
+  /* ── States ── */
+  .loading  { color: var(--text-muted); font-size: 13px; padding: 24px; text-align: center; }
+  .empty    { color: var(--text-muted); font-size: 13px; padding: 32px; text-align: center; }
+  .error-msg {
+    background: rgba(248,81,73,.1); border: 1px solid rgba(248,81,73,.3);
+    border-radius: 8px; color: var(--red); font-size: 13px;
+    padding: 12px 16px; margin-bottom: 16px;
+  }
+
+  /* ── Two-col layout ── */
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .panel-header {
+    background: var(--surface2); border-bottom: 1px solid var(--border);
+    color: var(--text-muted); font-size: 11px; font-weight: 600;
+    letter-spacing: 0.06em; padding: 8px 14px; text-transform: uppercase;
+  }
+  .activity-item { border-bottom: 1px solid var(--border); padding: 10px 14px; display: flex; gap: 10px; align-items: flex-start; }
+  .activity-item:last-child { border-bottom: none; }
+  .activity-text { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .activity-meta { color: var(--text-muted); font-size: 11px; white-space: nowrap; margin-top: 2px; }
+
+  /* ── Auto-refresh ── */
+  .auto-refresh { color: var(--text-muted); font-size: 11px; }
+  #next-refresh { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<!-- ── Auth banner ────────────────────────────── -->
+<div id="auth-banner">
+  <label>API Key</label>
+  <input id="key-input" type="password" placeholder="Paste your API_KEY from Railway env vars" />
+  <button id="auth-btn">Connect</button>
+  <span id="auth-status"></span>
+</div>
+
+<!-- ── Header ─────────────────────────────────── -->
+<header>
+  <div class="logo">⚛ Atom Admin <span>Railway · Supabase</span></div>
+  <div style="display:flex;align-items:center;gap:16px;">
+    <span class="auto-refresh">Refresh in <span id="next-refresh">30s</span></span>
+    <div id="health-badge">
+      <span class="dot grey" id="health-dot"></span>
+      <span id="health-text">Not connected</span>
+    </div>
+  </div>
+</header>
+
+<!-- ── Nav ────────────────────────────────────── -->
+<nav>
+  <button class="tab active" data-tab="overview">Overview</button>
+  <button class="tab" data-tab="users">Users</button>
+  <button class="tab" data-tab="pending">Pending Actions</button>
+  <button class="tab" data-tab="integrations">Integrations</button>
+  <button class="tab" data-tab="activity">Activity</button>
+</nav>
+
+<main>
+
+  <!-- ══ OVERVIEW ══ -->
+  <div id="tab-overview" class="section active">
+    <div id="overview-error"></div>
+    <div class="cards">
+      <div class="card"><div class="label">Users</div><div class="value" id="stat-users">—</div><div class="sub">registered accounts</div></div>
+      <div class="card green"><div class="label">Pending Actions</div><div class="value" id="stat-pending">—</div><div class="sub">awaiting confirmation</div></div>
+      <div class="card blue"><div class="label">Messages (24h)</div><div class="value" id="stat-msgs24h">—</div><div class="sub">conversation turns</div></div>
+      <div class="card purple"><div class="label">Scheduled Tasks</div><div class="value" id="stat-tasks">—</div><div class="sub">pending execution</div></div>
+      <div class="card"><div class="label">Confirmed Actions</div><div class="value" id="stat-confirmed">—</div><div class="sub">write actions executed</div></div>
+      <div class="card yellow"><div class="label">Expired Actions</div><div class="value" id="stat-expired">—</div><div class="sub">timed out</div></div>
+    </div>
+    <div class="two-col">
+      <div class="panel">
+        <div class="panel-header">System Health</div>
+        <div id="health-panel"><div class="loading">Loading…</div></div>
+      </div>
+      <div class="panel">
+        <div class="panel-header">Recent Pending Actions</div>
+        <div id="recent-actions-panel"><div class="loading">Loading…</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ USERS ══ -->
+  <div id="tab-users" class="section">
+    <div class="section-header">
+      <h2>Users</h2>
+      <button class="refresh-btn" onclick="loadUsers()">↻ Refresh</button>
+    </div>
+    <div id="users-error"></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Email</th><th>Display Name</th><th>Status</th><th>User ID</th><th>Registered</th><th>Updated</th></tr></thead>
+        <tbody id="users-tbody"><tr><td colspan="6" class="loading">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ══ PENDING ACTIONS ══ -->
+  <div id="tab-pending" class="section">
+    <div class="section-header">
+      <h2>Pending Actions</h2>
+      <button class="refresh-btn" onclick="loadPendingActions()">↻ Refresh</button>
+    </div>
+    <div id="pending-error"></div>
+    <div class="filter-bar">
+      <label>Status:</label>
+      <select id="pending-status-filter" onchange="loadPendingActions()">
+        <option value="">All</option>
+        <option value="pending">Pending</option>
+        <option value="confirmed">Confirmed</option>
+        <option value="expired">Expired</option>
+        <option value="cancelled">Cancelled</option>
+      </select>
+      <label>User ID:</label>
+      <input id="pending-user-filter" type="text" placeholder="Filter by userId…" style="width:240px;" />
+      <button class="refresh-btn" onclick="loadPendingActions()">Apply</button>
+      <label>Limit:</label>
+      <select id="pending-limit" onchange="loadPendingActions()">
+        <option value="25">25</option><option value="50" selected>50</option><option value="100">100</option>
+      </select>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Tool</th><th>Summary</th><th>Status</th><th>User ID</th><th>Result</th><th>Created</th><th>Expires</th></tr></thead>
+        <tbody id="pending-tbody"><tr><td colspan="7" class="loading">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ══ INTEGRATIONS ══ -->
+  <div id="tab-integrations" class="section">
+    <div class="section-header">
+      <h2>Integrations</h2>
+      <button class="refresh-btn" onclick="loadIntegrations()">↻ Refresh</button>
+    </div>
+    <div id="integrations-error"></div>
+    <p style="color:var(--text-muted);font-size:12px;margin-bottom:16px;">
+      Showing status for the API-key owner account.
+    </p>
+    <div class="integrations-grid" id="integrations-grid">
+      <div class="loading">Loading…</div>
+    </div>
+  </div>
+
+  <!-- ══ ACTIVITY ══ -->
+  <div id="tab-activity" class="section">
+    <div class="section-header">
+      <h2>Conversation Activity</h2>
+      <button class="refresh-btn" onclick="loadActivity()">↻ Refresh</button>
+    </div>
+    <div id="activity-error"></div>
+    <div class="filter-bar">
+      <label>Session ID:</label>
+      <input id="activity-session-filter" type="text" placeholder="Filter by sessionId…" style="width:280px;" />
+      <button class="refresh-btn" onclick="loadActivity()">Apply</button>
+      <label>Limit:</label>
+      <select id="activity-limit" onchange="loadActivity()">
+        <option value="25">25</option><option value="50" selected>50</option><option value="100">100</option>
+      </select>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Role</th><th>Session</th><th>Message Preview</th><th>Timestamp</th></tr></thead>
+        <tbody id="activity-tbody"><tr><td colspan="4" class="loading">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+</main>
+
+<script>
+// ─── Auth ─────────────────────────────────────────────────────
+const LS_KEY = 'atom_admin_key';
+let API_KEY  = localStorage.getItem(LS_KEY) || '';
+
+const keyInput   = document.getElementById('key-input');
+const authStatus = document.getElementById('auth-status');
+keyInput.value   = API_KEY;
+
+document.getElementById('auth-btn').addEventListener('click', () => {
+  API_KEY = keyInput.value.trim();
+  localStorage.setItem(LS_KEY, API_KEY);
+  authStatus.textContent = '✓ Saved';
+  authStatus.style.color = 'var(--green)';
+  setTimeout(() => authStatus.textContent = '', 2000);
+  refreshAll();
+});
+
+// ─── HTTP ─────────────────────────────────────────────────────
+// All paths are relative — no BASE_URL needed since this page
+// is served by the same backend it's talking to.
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    ...opts,
+    headers: {
+      'Authorization': `Bearer ${API_KEY}`,
+      'Content-Type':  'application/json',
+      ...(opts.headers || {}),
+    },
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    throw new Error(`${res.status} — ${text}`);
+  }
+  return res.json();
+}
+
+function showError(elId, msg) {
+  const el = document.getElementById(elId);
+  if (el) el.innerHTML = msg ? `<div class="error-msg">⚠ ${msg}</div>` : '';
+}
+
+function fmt(dt) {
+  if (!dt) return '—';
+  const d = new Date(dt);
+  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function pill(status) { return `<span class="pill ${status}">${status}</span>`; }
+
+// ─── Tabs ─────────────────────────────────────────────────────
+const tabLoaders = {
+  overview:     () => { loadStats(); loadOverviewHealth(); loadRecentActions(); },
+  users:        loadUsers,
+  pending:      loadPendingActions,
+  integrations: loadIntegrations,
+  activity:     loadActivity,
+};
+
+document.querySelectorAll('.tab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+    btn.classList.add('active');
+    const id = btn.dataset.tab;
+    document.getElementById('tab-' + id).classList.add('active');
+    tabLoaders[id]?.();
+  });
+});
+
+// ─── Health ───────────────────────────────────────────────────
+async function checkHealth() {
+  const dot  = document.getElementById('health-dot');
+  const text = document.getElementById('health-text');
+  try {
+    const [live, ready] = await Promise.all([
+      fetch('/health').then(r => r.json()).catch(() => null),
+      fetch('/health/ready').then(r => r.json()).catch(() => null),
+    ]);
+    if (!live) { dot.className = 'dot red'; text.textContent = 'Unreachable'; return { live: null, ready: null }; }
+    const dbOk = ready?.status === 'ok';
+    dot.className    = dbOk ? 'dot green' : 'dot yellow';
+    text.textContent = dbOk
+      ? `OK · v${live.version ?? '?'} · up ${Math.floor((live.uptime || 0) / 60)}m`
+      : 'DB Error';
+    return { live, ready };
+  } catch (e) {
+    dot.className = 'dot red'; text.textContent = 'Error';
+    return { live: null, ready: null };
+  }
+}
+
+async function loadOverviewHealth() {
+  const panel = document.getElementById('health-panel');
+  panel.innerHTML = '<div class="loading">Checking…</div>';
+  try {
+    const { live, ready } = await checkHealth();
+    if (!live) {
+      panel.innerHTML = '<div class="activity-item"><span class="activity-text" style="color:var(--red)">Backend unreachable.</span></div>';
+      return;
+    }
+    const dbOk = ready?.status === 'ok';
+    panel.innerHTML = `
+      <div class="activity-item">
+        <span class="dot green" style="margin-top:4px;flex-shrink:0"></span>
+        <div>
+          <div class="activity-text">Liveness: <strong style="color:var(--green)">OK</strong></div>
+          <div class="activity-meta">v${live.version ?? '?'} · uptime ${Math.floor((live.uptime || 0) / 60)} min</div>
+        </div>
+      </div>
+      <div class="activity-item">
+        <span class="dot ${dbOk ? 'green' : 'red'}" style="margin-top:4px;flex-shrink:0"></span>
+        <div>
+          <div class="activity-text">Database: <strong style="color:${dbOk ? 'var(--green)' : 'var(--red)'}">
+            ${dbOk ? 'Connected' : 'Disconnected'}
+          </strong></div>
+          <div class="activity-meta">${ready?.db ?? '—'} · ${ready?.timestamp ?? ''}</div>
+        </div>
+      </div>
+    `;
+  } catch (e) {
+    panel.innerHTML = `<div class="activity-item"><span style="color:var(--red)">${e.message}</span></div>`;
+  }
+}
+
+// ─── Stats ────────────────────────────────────────────────────
+async function loadStats() {
+  try {
+    showError('overview-error', '');
+    const s = await api('/admin/stats');
+    document.getElementById('stat-users').textContent     = s.users?.total ?? '—';
+    document.getElementById('stat-pending').textContent   = s.pendingActions?.pending ?? '—';
+    document.getElementById('stat-msgs24h').textContent   = s.activityLast24h?.messages ?? '—';
+    document.getElementById('stat-tasks').textContent     = s.scheduledTasks?.pending ?? '—';
+    document.getElementById('stat-confirmed').textContent = s.pendingActions?.confirmed ?? '—';
+    document.getElementById('stat-expired').textContent   = s.pendingActions?.expired ?? '—';
+  } catch (e) {
+    showError('overview-error', `Stats: ${e.message}`);
+  }
+}
+
+// ─── Recent actions (overview) ────────────────────────────────
+async function loadRecentActions() {
+  const panel = document.getElementById('recent-actions-panel');
+  panel.innerHTML = '<div class="loading">Loading…</div>';
+  try {
+    const d = await api('/admin/pending-actions?limit=8');
+    if (!d.actions?.length) { panel.innerHTML = '<div class="empty">No actions yet</div>'; return; }
+    panel.innerHTML = d.actions.map(a => `
+      <div class="activity-item">
+        <div style="flex:1;overflow:hidden;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;">
+            <span class="mono">${a.toolName}</span>${pill(a.status)}
+          </div>
+          <div class="activity-text" style="white-space:normal;">${a.summary}</div>
+          <div class="activity-meta">${fmt(a.createdAt)} · ${a.userId.slice(0, 8)}…</div>
+        </div>
+      </div>
+    `).join('');
+  } catch (e) {
+    panel.innerHTML = `<div class="activity-item"><span style="color:var(--red)">${e.message}</span></div>`;
+  }
+}
+
+// ─── Users ────────────────────────────────────────────────────
+async function loadUsers() {
+  const tbody = document.getElementById('users-tbody');
+  tbody.innerHTML = '<tr><td colspan="6" class="loading">Loading…</td></tr>';
+  showError('users-error', '');
+  try {
+    const d = await api('/admin/users');
+    if (!d.users?.length) { tbody.innerHTML = '<tr><td colspan="6" class="empty">No users</td></tr>'; return; }
+    tbody.innerHTML = d.users.map(u => `
+      <tr>
+        <td>${u.email}</td>
+        <td>${u.displayName || '<span style="color:var(--text-muted)">—</span>'}</td>
+        <td>${pill(u.isVerified ? 'verified' : 'unverified')}</td>
+        <td class="mono">${u.id}</td>
+        <td class="mono" style="white-space:nowrap;">${fmt(u.createdAt)}</td>
+        <td class="mono" style="white-space:nowrap;">${fmt(u.updatedAt)}</td>
+      </tr>
+    `).join('');
+  } catch (e) {
+    showError('users-error', e.message);
+    tbody.innerHTML = '<tr><td colspan="6" class="empty">Failed to load</td></tr>';
+  }
+}
+
+// ─── Pending actions ──────────────────────────────────────────
+async function loadPendingActions() {
+  const tbody = document.getElementById('pending-tbody');
+  tbody.innerHTML = '<tr><td colspan="7" class="loading">Loading…</td></tr>';
+  showError('pending-error', '');
+  try {
+    const status = document.getElementById('pending-status-filter').value;
+    const userId = document.getElementById('pending-user-filter').value.trim();
+    const limit  = document.getElementById('pending-limit').value;
+    const params = new URLSearchParams({ limit });
+    if (status) params.set('status', status);
+    if (userId) params.set('userId', userId);
+    const d = await api(`/admin/pending-actions?${params}`);
+    if (!d.actions?.length) { tbody.innerHTML = '<tr><td colspan="7" class="empty">No results</td></tr>'; return; }
+    tbody.innerHTML = d.actions.map(a => `
+      <tr>
+        <td class="mono">${a.toolName}</td>
+        <td class="truncate" title="${a.summary.replace(/"/g,'&quot;')}">${a.summary}</td>
+        <td>${pill(a.status)}</td>
+        <td class="mono">${a.userId.slice(0, 8)}…</td>
+        <td class="truncate" style="color:var(--text-muted);font-size:12px;">${a.resultSummary || '—'}</td>
+        <td class="mono" style="white-space:nowrap;">${fmt(a.createdAt)}</td>
+        <td class="mono" style="white-space:nowrap;">${fmt(a.expiresAt)}</td>
+      </tr>
+    `).join('');
+  } catch (e) {
+    showError('pending-error', e.message);
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">Failed to load</td></tr>';
+  }
+}
+
+// ─── Integrations ─────────────────────────────────────────────
+async function loadIntegrations() {
+  const grid = document.getElementById('integrations-grid');
+  grid.innerHTML = '<div class="loading">Checking…</div>';
+  showError('integrations-error', '');
+
+  const checks = [
+    { name: 'Gmail',            icon: '📧', endpoints: [
+        { label: 'OAuth',   path: '/email/oauth/gmail-status' },
+        { label: 'Provider', path: '/api/v1/integrations/email/gmail/status' },
+    ]},
+    { name: 'Google Calendar',  icon: '📅', endpoints: [
+        { label: 'Status', path: '/api/v1/integrations/calendar/status' },
+    ]},
+    { name: 'AccuLynx CRM',     icon: '🏗️', endpoints: [
+        { label: 'Status', path: '/api/v1/integrations/crm/status' },
+    ]},
+  ];
+
+  const results = await Promise.allSettled(
+    checks.map(async c => {
+      const epResults = await Promise.allSettled(
+        c.endpoints.map(ep =>
+          api(ep.path)
+            .then(data => ({ ep, data, ok: true }))
+            .catch(err => ({ ep, err, ok: false }))
+        )
+      );
+      return { ...c, eps: epResults.map(r => r.status === 'fulfilled' ? r.value : r.reason) };
+    })
+  );
+
+  grid.innerHTML = checks.map((check, i) => {
+    const r    = results[i];
+    const eps  = r.status === 'fulfilled' ? r.value.eps : [];
+    const anyOk = eps.some(e => e.ok);
+
+    const details = eps.map(e => {
+      if (!e.ok) return `<div class="int-detail">⚠ ${e.ep?.label ?? '?'}: ${e.err?.message ?? 'Failed'}</div>`;
+      const d = e.data;
+      const email     = d.emailAddress || d.email || d.connected?.emailAddress || '';
+      const connected = d.connected === true || d.status === 'connected' || d.ok === true || !!d.emailAddress;
+      return `<div class="int-detail">${e.ep.label}: ${connected ? '✓ Active' : '✗ Inactive'}${email ? ' · ' + email : ''}</div>`;
+    }).join('');
+
+    return `
+      <div class="int-card">
+        <div class="int-header">
+          <div><div class="int-name">${check.name}</div>${details}</div>
+          <div style="text-align:right;">
+            <div class="int-icon">${check.icon}</div>
+            <div style="margin-top:6px;">${pill(anyOk ? 'ok' : 'error')}</div>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+// ─── Activity ─────────────────────────────────────────────────
+async function loadActivity() {
+  const tbody = document.getElementById('activity-tbody');
+  tbody.innerHTML = '<tr><td colspan="4" class="loading">Loading…</td></tr>';
+  showError('activity-error', '');
+  try {
+    const sessionId = document.getElementById('activity-session-filter').value.trim();
+    const limit     = document.getElementById('activity-limit').value;
+    const params    = new URLSearchParams({ limit });
+    if (sessionId) params.set('sessionId', sessionId);
+    const d = await api(`/admin/activity?${params}`);
+    if (!d.messages?.length) { tbody.innerHTML = '<tr><td colspan="4" class="empty">No messages</td></tr>'; return; }
+    tbody.innerHTML = d.messages.map(m => `
+      <tr>
+        <td>${pill(m.role)}</td>
+        <td class="mono">${m.sessionId ? m.sessionId.slice(0, 12) + '…' : '—'}</td>
+        <td class="truncate" title="${(m.preview || '').replace(/"/g,'&quot;')}">${m.preview || ''}</td>
+        <td class="mono" style="white-space:nowrap;">${fmt(m.createdAt)}</td>
+      </tr>
+    `).join('');
+  } catch (e) {
+    showError('activity-error', e.message);
+    tbody.innerHTML = '<tr><td colspan="4" class="empty">Failed to load</td></tr>';
+  }
+}
+
+// ─── Auto-refresh (30s) ───────────────────────────────────────
+let countdown = 30;
+setInterval(() => {
+  document.getElementById('next-refresh').textContent = countdown + 's';
+  if (--countdown <= 0) {
+    countdown = 30;
+    const active = document.querySelector('.tab.active')?.dataset?.tab;
+    if (active === 'overview') { checkHealth(); loadStats(); loadRecentActions(); }
+    else tabLoaders[active]?.();
+  }
+}, 1000);
+
+function refreshAll() {
+  countdown = 30;
+  checkHealth();
+  tabLoaders[document.querySelector('.tab.active')?.dataset?.tab || 'overview']?.();
+}
+
+// ─── Init ─────────────────────────────────────────────────────
+if (API_KEY) refreshAll();
+else document.getElementById('health-text').textContent = 'Enter API key above';
+</script>
+</body>
+</html>
