@@ -22,6 +22,9 @@ RUN npm ci --omit=dev --legacy-peer-deps && npm cache clean --force
 
 COPY --from=builder /app/dist ./dist
 
+# Static web client (index.html, admin.html) served same-origin by main.ts
+COPY --from=builder /app/public ./public
+
 # Create uploads directory so multer has somewhere to write without touching
 # the image layer (mount a volume here in production).
 RUN mkdir -p uploads
