@@ -25,7 +25,9 @@ export class ClaudeOrchestratorService {
   private readonly anthropic: Anthropic;
   private readonly logger = new Logger(ClaudeOrchestratorService.name);
 
-  static readonly MODEL = 'claude-sonnet-4-5-20250929';
+  // Configurable via CLAUDE_MODEL env var so model upgrades don't require a
+  // code change + redeploy — just update the variable and restart.
+  static readonly MODEL = process.env.CLAUDE_MODEL || 'claude-sonnet-4-5-20250929';
 
   constructor(
     private readonly config: ConfigService,

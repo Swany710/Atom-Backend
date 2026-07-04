@@ -6,6 +6,8 @@ import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { JwtModule } from '@nestjs/jwt';
 import { ScheduleModule } from '@nestjs/schedule';
 import * as dns from 'dns';
+import * as crypto from 'crypto';
+import * as fs from 'fs';
 import { VoiceModule } from './voice/voice.module';
 import { EmailModule } from './integrations/email/email.module';
 import { CalendarModule } from './integrations/calendar/calendar.module';
@@ -34,6 +36,39 @@ const isSupabasePooler = (url?: string): boolean =>
 const isSupabase = (url?: string): boolean =>
   !!url && url.includes('supabase');
 
+/**
+ * Build the TypeORM/pg `ssl` option.
+ * - No SSL needed → false
+ * - DATABASE_TLS_STRICT=true → verify cert (with CA if provided)
+ * - Otherwise → encrypted but unverified (legacy behavior) + warning
+ */
+function buildSslConfig(supa: boolean): false | Record<string, unknown> {
+  const sslWanted = supa || process.env.DATABASE_SSL === 'true';
+  if (!sslWanted) return false;
+
+  const strict = process.env.DATABASE_TLS_STRICT === 'true';
+  if (!strict) {
+    console.warn(
+      '⚠️  DATABASE_TLS_STRICT is not enabled — DB TLS certificate is NOT verified. ' +
+      'Set DATABASE_TLS_STRICT=true and provide DATABASE_CA_CERT (or _PATH) in production.',
+    );
+    return { rejectUnauthorized: false };
+  }
+
+  let ca: string | undefined = process.env.DATABASE_CA_CERT;
+  const caPath = process.env.DATABASE_CA_CERT_PATH;
+  if (!ca && caPath) {
+    try {
+      ca = fs.readFileSync(caPath, 'utf8');
+    } catch (err) {
+      console.error(`FATAL: DATABASE_CA_CERT_PATH is set but unreadable: ${caPath}`);
+      process.exit(1);
+    }
+  }
+
+  return { rejectUnauthorized: true, ...(ca ? { ca } : {}) };
+}
+
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -56,10 +91,17 @@ const isSupabase = (url?: string): boolean =>
           migrations:       ['dist/migrations/*.js'],
           autoLoadEntities: true,
 
-          // SSL required for Supabase
-          ssl: supa || process.env.DATABASE_SSL === 'true'
-            ? { rejectUnauthorized: false }
-            : false,
+          // SSL required for Supabase.
+          //
+          // DATABASE_TLS_STRICT=true (recommended in production) verifies the
+          // server certificate, protecting DB traffic from MITM. Supabase uses
+          // a self-signed CA, so strict mode needs the CA cert — provide it via
+          //   DATABASE_CA_CERT       (PEM contents, e.g. Railway env var), or
+          //   DATABASE_CA_CERT_PATH  (path to a PEM file).
+          // Download it from: Supabase Dashboard → Settings → Database → SSL.
+          // Without strict mode we fall back to encrypted-but-unverified TLS
+          // and log a warning so the gap is visible.
+          ssl: buildSslConfig(supa),
 
           extra: {
             max:                     pooler ? 3 : 5,
@@ -79,10 +121,27 @@ const isSupabase = (url?: string): boolean =>
     ScheduleModule.forRoot(),
 
     JwtModule.registerAsync({
-      useFactory: () => ({
-        secret:      process.env.JWT_SECRET ?? 'dev-jwt-secret-UNSAFE',
-        signOptions: { expiresIn: (process.env.JWT_EXPIRES_IN ?? '7d') as any },
-      }),
+      useFactory: () => {
+        // No hardcoded fallback secret — a known default would let anyone
+        // forge valid tokens if env validation were ever bypassed.
+        // Production: env.validation.ts exits at boot if JWT_SECRET is unset.
+        // Development: generate a random per-boot secret (dev JWTs won't
+        // survive a restart — acceptable trade for never having a guessable
+        // secret in the codebase).
+        let secret = process.env.JWT_SECRET;
+        if (!secret) {
+          if (isProd) throw new Error('JWT_SECRET is required in production');
+          secret = crypto.randomBytes(32).toString('hex');
+          console.warn('⚠️  [dev] JWT_SECRET not set — using random per-boot secret (JWTs reset on restart)');
+        }
+        return {
+          secret,
+          // 24h default (was 7d): tokens live in browser localStorage, so a
+          // shorter lifetime limits the damage window if one is ever stolen.
+          // Override with JWT_EXPIRES_IN if you need longer sessions.
+          signOptions: { expiresIn: (process.env.JWT_EXPIRES_IN ?? '24h') as any },
+        };
+      },
     }),
 
     HealthModule,

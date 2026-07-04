@@ -1,4 +1,4 @@
-# ── Stage 1: build ────────────────────────────────────────────────────────────
+﻿# ── Stage 1: build ────────────────────────────────────────────────────────────
 # Install all dependencies (including devDependencies) and compile TypeScript.
 FROM node:20-alpine AS builder
 WORKDIR /app
@@ -22,8 +22,11 @@ RUN npm ci --omit=dev --legacy-peer-deps && npm cache clean --force
 
 COPY --from=builder /app/dist ./dist
 
-# Static web client (index.html, admin.html) served same-origin by main.ts
+# Static admin dashboard (admin.html) served same-origin by main.ts
 COPY --from=builder /app/public ./public
+
+# Supabase CA chain for strict DB TLS (DATABASE_CA_CERT_PATH=supabase-prod-ca.crt)
+COPY --from=builder /app/supabase-prod-ca.crt ./supabase-prod-ca.crt
 
 # Create uploads directory so multer has somewhere to write without touching
 # the image layer (mount a volume here in production).

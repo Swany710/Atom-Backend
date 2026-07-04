@@ -8,7 +8,21 @@ import {
 import { Reflector } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
+import * as crypto from 'crypto';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
+
+/**
+ * Constant-time string comparison.
+ * A naive `a !== b` short-circuits on the first mismatching character, which
+ * leaks timing information an attacker can use to recover the API key
+ * byte-by-byte. crypto.timingSafeEqual always compares every byte.
+ * Hashing both sides first also hides length differences.
+ */
+function timingSafeEquals(a: string, b: string): boolean {
+  const ha = crypto.createHash('sha256').update(a).digest();
+  const hb = crypto.createHash('sha256').update(b).digest();
+  return crypto.timingSafeEqual(ha, hb);
+}
 
 /**
  * Unified authentication guard.
@@ -84,7 +98,7 @@ export class ApiKeyGuard implements CanActivate {
       // ── API-key check ─────────────────────────────────────────────────
       const apiKey = this.config.get<string>('API_KEY');
       if (apiKey) {
-        if (token !== apiKey) {
+        if (!timingSafeEquals(token, apiKey)) {
           throw new UnauthorizedException('Invalid or missing API key');
         }
         const ownerId = this.config.get<string>('OWNER_USER_ID');
