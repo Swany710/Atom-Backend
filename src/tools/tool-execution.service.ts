@@ -1,5 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { EMAIL_PROVIDER, IEmailService } from '../integrations/email/email.provider';
+import { EmailService as EmailRouterService } from '../integrations/email/email.service';
 import { GmailService } from '../integrations/email/gmail.service';
 import { CalendarService } from '../integrations/calendar/calendar.service';
 import { GoogleCalendarService } from '../integrations/calendar/google-calendar.service';
@@ -54,7 +55,31 @@ export class ToolExecutionService {
     private readonly scheduledTasks: ScheduledTaskService,
     @Inject(EMAIL_PROVIDER)
     private readonly emailService: IEmailService,
+    // Provider-aware router: resolves per-user which email account is
+    // connected (gmail | outlook) and delegates to the matching transport.
+    private readonly emailRouter: EmailRouterService,
   ) {}
+
+  /**
+   * Which email provider did THIS user connect?
+   * Email tools used to be hardwired to GmailService, which made Outlook
+   * connections invisible — users connected Outlook and still got
+   * "Gmail is not connected" errors.
+   */
+  private async userEmailProvider(userId: string): Promise<'gmail' | 'outlook'> {
+    try {
+      return await this.emailRouter.getActiveProvider(userId);
+    } catch {
+      return 'gmail'; // conservative fallback: previous hardwired behavior
+    }
+  }
+
+  private outlookUnsupported(action: string) {
+    return {
+      success: false,
+      error: `${action} isn't available for Outlook accounts yet. Use read_emails or search_emails instead.`,
+    };
+  }
 
   // ── Public dispatch ───────────────────────────────────────────────────────
 
@@ -154,7 +179,24 @@ export class ToolExecutionService {
     sessionId: string,
   ): Promise<unknown> {
     switch (toolName) {
-      case 'send_email':
+      case 'send_email': {
+        const provider = await this.userEmailProvider(userId);
+        if (provider === 'outlook') {
+          return providerWrite(
+            () => this.emailRouter.sendEmail(
+              args.to as string[],
+              args.subject as string,
+              args.body as string,
+              (args.draftOnly as boolean) || false,
+              args.cc as string[] | undefined,
+              undefined,
+              undefined,
+              userId,
+              'outlook',
+            ),
+            'outlook.sendEmail',
+          );
+        }
         return providerWrite(
           () => this.emailService.sendEmail(
             args.to as string[],
@@ -168,8 +210,22 @@ export class ToolExecutionService {
           ),
           'gmail.sendEmail',
         );
+      }
 
-      case 'reply_email':
+      case 'reply_email': {
+        const provider = await this.userEmailProvider(userId);
+        if (provider === 'outlook') {
+          return providerWrite(
+            () => this.emailRouter.replyToEmail(
+              args.messageId as string,
+              args.body as string,
+              (args.replyAll as boolean) ?? false,
+              userId,
+              'outlook',
+            ),
+            'outlook.replyToEmail',
+          );
+        }
         return providerWrite(
           () => this.gmailService.replyToEmail(
             args.messageId as string,
@@ -179,6 +235,7 @@ export class ToolExecutionService {
           ),
           'gmail.replyToEmail',
         );
+      }
 
       case 'create_calendar_event':
         return providerWrite(
@@ -245,7 +302,20 @@ export class ToolExecutionService {
           'knowledge_base.search',
         );
 
-      case 'read_emails':
+      case 'read_emails': {
+        const provider = await this.userEmailProvider(userId);
+        if (provider === 'outlook') {
+          return providerRead(
+            () => this.emailRouter.readEmails(
+              (args.maxResults as number) ?? 20,
+              args.query as string | undefined,
+              (args.unreadOnly as boolean) ?? false,
+              userId,
+              'outlook',
+            ),
+            'outlook.readEmails',
+          );
+        }
         return providerRead(
           () => this.gmailService.readEmails(
             (args.maxResults as number) ?? 20,
@@ -255,8 +325,21 @@ export class ToolExecutionService {
           ),
           'gmail.readEmails',
         );
+      }
 
-      case 'search_emails':
+      case 'search_emails': {
+        const provider = await this.userEmailProvider(userId);
+        if (provider === 'outlook') {
+          return providerRead(
+            () => this.emailRouter.searchEmails(
+              args.query as string,
+              (args.maxResults as number) ?? 20,
+              userId,
+              'outlook',
+            ),
+            'outlook.searchEmails',
+          );
+        }
         return providerRead(
           () => this.gmailService.searchEmails(
             args.query as string,
@@ -265,27 +348,52 @@ export class ToolExecutionService {
           ),
           'gmail.searchEmails',
         );
+      }
 
-      case 'get_email':
+      case 'get_email': {
+        if (await this.userEmailProvider(userId) === 'outlook') {
+          return this.outlookUnsupported('get_email');
+        }
         return providerRead(
           () => this.gmailService.getEmail(args.messageId as string, userId),
           'gmail.getEmail',
         );
+      }
 
-      case 'get_thread':
+      case 'get_thread': {
+        if (await this.userEmailProvider(userId) === 'outlook') {
+          return this.outlookUnsupported('get_thread');
+        }
         return providerRead(
           () => this.gmailService.getThread(args.threadId as string, userId),
           'gmail.getThread',
         );
+      }
 
-      case 'list_email_labels':
+      case 'list_email_labels': {
+        if (await this.userEmailProvider(userId) === 'outlook') {
+          return this.outlookUnsupported('list_email_labels');
+        }
         return providerRead(
           () => this.gmailService.listLabels(userId),
           'gmail.listLabels',
         );
+      }
 
-      case 'mark_email_read':
+      case 'mark_email_read': {
         // Low-risk write — direct execute, no confirmation gate
+        const provider = await this.userEmailProvider(userId);
+        if (provider === 'outlook') {
+          return providerWrite(
+            () => this.emailRouter.markEmail(
+              args.messageId as string,
+              args.read as boolean,
+              userId,
+              'outlook',
+            ),
+            'outlook.markEmail',
+          );
+        }
         return providerWrite(
           () => this.gmailService.markRead(
             args.messageId as string,
@@ -294,20 +402,38 @@ export class ToolExecutionService {
           ),
           'gmail.markRead',
         );
+      }
 
-      case 'delete_email':
+      case 'delete_email': {
         // Organisational action — direct execute, no confirmation gate
+        const provider = await this.userEmailProvider(userId);
+        if (provider === 'outlook') {
+          return providerWrite(
+            () => this.emailRouter.deleteEmail(
+              args.messageId as string,
+              false,
+              userId,
+              'outlook',
+            ),
+            'outlook.deleteEmail',
+          );
+        }
         return providerWrite(
           () => this.gmailService.deleteEmail(args.messageId as string, userId),
           'gmail.deleteEmail',
         );
+      }
 
-      case 'archive_email':
+      case 'archive_email': {
         // Organisational action — direct execute, no confirmation gate
+        if (await this.userEmailProvider(userId) === 'outlook') {
+          return this.outlookUnsupported('archive_email');
+        }
         return providerWrite(
           () => this.gmailService.archiveEmail(args.messageId as string, userId),
           'gmail.archiveEmail',
         );
+      }
 
       case 'check_calendar':
         return providerRead(

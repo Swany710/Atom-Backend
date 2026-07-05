@@ -6,6 +6,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import axios from 'axios';
 import 'isomorphic-fetch';
+import { encryptToken, decryptToken } from '../../crypto.util';
 import { EmailConnection } from './email-connection.entity';
 import {
   EmailMessage,
@@ -335,15 +336,25 @@ export class OutlookTransport {
   }
 
   private async ensureToken(connection: EmailConnection): Promise<string> {
+    // Tokens are stored AES-encrypted by EmailOAuthService (enc:v1: prefix).
+    // decryptToken() transparently passes through legacy plaintext rows.
+    const accessPlain = connection.accessToken
+      ? decryptToken(connection.accessToken)
+      : undefined;
+
     if (
-      connection.accessToken &&
+      accessPlain &&
       (!connection.expiresAt ||
         connection.expiresAt.getTime() > Date.now() + 60_000)
     ) {
-      return connection.accessToken;
+      return accessPlain;
     }
 
-    if (!connection.refreshToken) {
+    const refreshPlain = connection.refreshToken
+      ? decryptToken(connection.refreshToken)
+      : undefined;
+
+    if (!refreshPlain) {
       throw new Error('Outlook access expired. Please reconnect Outlook.');
     }
 
@@ -368,7 +379,7 @@ export class OutlookTransport {
       new URLSearchParams({
         client_id: clientId,
         client_secret: clientSecret,
-        refresh_token: connection.refreshToken!,
+        refresh_token: refreshPlain,
         grant_type: 'refresh_token',
         redirect_uri: redirectUri,
         scope,
@@ -378,9 +389,10 @@ export class OutlookTransport {
 
     const { access_token, refresh_token, expires_in } = tokenResponse.data;
 
-    connection.accessToken = access_token;
+    // Re-encrypt before persisting — the DB must never hold plaintext tokens.
+    connection.accessToken = encryptToken(access_token);
     if (refresh_token) {
-      connection.refreshToken = refresh_token;
+      connection.refreshToken = encryptToken(refresh_token);
     }
     connection.expiresAt = expires_in ? new Date(Date.now() + expires_in * 1000) : undefined;
     await this.connectionRepo.save(connection);

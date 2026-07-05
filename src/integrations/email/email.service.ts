@@ -186,6 +186,14 @@ export class EmailService {
 
   // ── Provider resolution ────────────────────────────────────────────────────
 
+  /**
+   * Public lookup used by ToolExecutionService to route email tools to the
+   * provider the user actually connected (most recently updated connection).
+   */
+  async getActiveProvider(userId?: string): Promise<EmailProviderName> {
+    return this.resolveProvider(userId);
+  }
+
   private async resolveProvider(
     userId?: string,
     provider?: EmailProviderName,
