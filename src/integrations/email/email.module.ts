@@ -24,6 +24,6 @@ import { EMAIL_PROVIDER, emailProviderFactory } from './email.provider';
     EmailOAuthService,
   ],
   controllers: [EmailOAuthController, EmailController],
-  exports: [EMAIL_PROVIDER, OutlookEmailService, GmailService, EmailOAuthService],
+  exports: [EMAIL_PROVIDER, OutlookEmailService, OutlookTransport, GmailService, EmailOAuthService],
 })
 export class EmailModule {}

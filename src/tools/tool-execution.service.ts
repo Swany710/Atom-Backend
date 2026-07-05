@@ -1,9 +1,11 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { EMAIL_PROVIDER, IEmailService } from '../integrations/email/email.provider';
 import { EmailService as EmailRouterService } from '../integrations/email/email.service';
+import { OutlookTransport } from '../integrations/email/outlook.transport';
 import { GmailService } from '../integrations/email/gmail.service';
 import { CalendarService } from '../integrations/calendar/calendar.service';
 import { GoogleCalendarService } from '../integrations/calendar/google-calendar.service';
+import { OutlookCalendarService } from '../integrations/calendar/outlook-calendar.service';
 import { AccuLynxService } from '../integrations/crm/acculynx.service';
 import { KnowledgeBaseService } from '../knowledge-base/knowledge-base.service';
 import { ToolDefinitionsService } from './tool-definitions.service';
@@ -58,7 +60,26 @@ export class ToolExecutionService {
     // Provider-aware router: resolves per-user which email account is
     // connected (gmail | outlook) and delegates to the matching transport.
     private readonly emailRouter: EmailRouterService,
+    private readonly outlookTransport: OutlookTransport,
+    private readonly outlookCalendar: OutlookCalendarService,
   ) {}
+
+  /**
+   * Which calendar should this user's calendar tools hit?
+   *   1. Google Calendar if they connected Google (existing behavior)
+   *   2. Their Outlook calendar if they connected Outlook
+   *   3. The env-credential Microsoft fallback (CalendarService) otherwise
+   */
+  private async calendarProviderFor(userId: string): Promise<'google' | 'outlook' | 'fallback'> {
+    try {
+      const status = await this.googleCalendar.getConnectionStatus(userId);
+      if (status.connected) return 'google';
+    } catch { /* fall through */ }
+    try {
+      if (await this.outlookCalendar.hasConnection(userId)) return 'outlook';
+    } catch { /* fall through */ }
+    return 'fallback';
+  }
 
   /**
    * Which email provider did THIS user connect?
@@ -74,12 +95,6 @@ export class ToolExecutionService {
     }
   }
 
-  private outlookUnsupported(action: string) {
-    return {
-      success: false,
-      error: `${action} isn't available for Outlook accounts yet. Use read_emails or search_emails instead.`,
-    };
-  }
 
   // ── Public dispatch ───────────────────────────────────────────────────────
 
@@ -243,7 +258,21 @@ export class ToolExecutionService {
           'calendar.createEvent',
         );
 
-      case 'update_calendar_event':
+      case 'update_calendar_event': {
+        const calProvider = await this.calendarProviderFor(userId);
+        if (calProvider === 'outlook') {
+          return providerWrite(
+            () => this.outlookCalendar.updateEvent(userId, args.eventId as string, {
+              title:       args.title as string,
+              startTime:   args.start_time as string,
+              endTime:     args.end_time as string,
+              description: args.description as string,
+              location:    args.location as string,
+              attendees:   args.attendees as string[],
+            }),
+            'outlookCalendar.updateEvent',
+          );
+        }
         return providerWrite(
           () => this.googleCalendar.updateEvent(userId, args.eventId as string, {
             title:       args.title as string,
@@ -255,12 +284,21 @@ export class ToolExecutionService {
           }),
           'calendar.updateEvent',
         );
+      }
 
-      case 'delete_calendar_event':
+      case 'delete_calendar_event': {
+        const calProvider = await this.calendarProviderFor(userId);
+        if (calProvider === 'outlook') {
+          return providerWrite(
+            () => this.outlookCalendar.deleteEvent(userId, args.eventId as string),
+            'outlookCalendar.deleteEvent',
+          );
+        }
         return providerWrite(
           () => this.googleCalendar.deleteEvent(userId, args.eventId as string),
           'calendar.deleteEvent',
         );
+      }
 
       case 'crm_add_note':
         return providerWrite(
@@ -352,7 +390,10 @@ export class ToolExecutionService {
 
       case 'get_email': {
         if (await this.userEmailProvider(userId) === 'outlook') {
-          return this.outlookUnsupported('get_email');
+          return providerRead(
+            () => this.outlookTransport.getEmail(userId, args.messageId as string),
+            'outlook.getEmail',
+          );
         }
         return providerRead(
           () => this.gmailService.getEmail(args.messageId as string, userId),
@@ -362,7 +403,10 @@ export class ToolExecutionService {
 
       case 'get_thread': {
         if (await this.userEmailProvider(userId) === 'outlook') {
-          return this.outlookUnsupported('get_thread');
+          return providerRead(
+            () => this.outlookTransport.getThread(userId, args.threadId as string),
+            'outlook.getThread',
+          );
         }
         return providerRead(
           () => this.gmailService.getThread(args.threadId as string, userId),
@@ -372,7 +416,10 @@ export class ToolExecutionService {
 
       case 'list_email_labels': {
         if (await this.userEmailProvider(userId) === 'outlook') {
-          return this.outlookUnsupported('list_email_labels');
+          return providerRead(
+            () => this.outlookTransport.listFolders(userId),
+            'outlook.listFolders',
+          );
         }
         return providerRead(
           () => this.gmailService.listLabels(userId),
@@ -427,7 +474,10 @@ export class ToolExecutionService {
       case 'archive_email': {
         // Organisational action — direct execute, no confirmation gate
         if (await this.userEmailProvider(userId) === 'outlook') {
-          return this.outlookUnsupported('archive_email');
+          return providerWrite(
+            () => this.outlookTransport.archive(userId, args.messageId as string),
+            'outlook.archiveEmail',
+          );
         }
         return providerWrite(
           () => this.gmailService.archiveEmail(args.messageId as string, userId),
@@ -447,7 +497,18 @@ export class ToolExecutionService {
           'calendar.checkCalendar',
         );
 
-      case 'search_calendar':
+      case 'search_calendar': {
+        const calProvider = await this.calendarProviderFor(userId);
+        if (calProvider === 'outlook') {
+          return providerRead(
+            () => this.outlookCalendar.searchEvents(
+              userId,
+              args.query as string,
+              (args.maxResults as number) ?? 20,
+            ),
+            'outlookCalendar.searchEvents',
+          );
+        }
         return providerRead(
           () => this.googleCalendar.searchEvents(
             userId,
@@ -456,6 +517,7 @@ export class ToolExecutionService {
           ),
           'calendar.searchEvents',
         );
+      }
 
       case 'get_crm_jobs':
         return providerRead(
@@ -579,16 +641,24 @@ export class ToolExecutionService {
     userId?: string,    // ← auth user ID for OAuth lookup
     sessionId?: string,
   ): Promise<unknown> {
+    const uid = userId ?? '';
+    const days = endDate
+      ? Math.ceil(
+          (new Date(endDate).getTime() - new Date(startDate).getTime()) / 86_400_000,
+        )
+      : 1;
+
     try {
-      const uid = userId ?? '';
       const status = await this.googleCalendar.getConnectionStatus(uid);
       if (status.connected) {
-        const days = endDate
-          ? Math.ceil(
-              (new Date(endDate).getTime() - new Date(startDate).getTime()) / 86_400_000,
-            )
-          : 1;
         return this.googleCalendar.getUpcomingEvents(uid, Math.max(days, 1));
+      }
+    } catch { /* fall through */ }
+
+    // User connected Outlook → use THEIR calendar via their OAuth token
+    try {
+      if (await this.outlookCalendar.hasConnection(uid)) {
+        return this.outlookCalendar.getUpcomingEvents(uid, Math.max(days, 1));
       }
     } catch { /* fall through to CalendarService */ }
 
@@ -600,11 +670,27 @@ export class ToolExecutionService {
     userId?: string,    // ← auth user ID for OAuth lookup
     sessionId?: string,
   ): Promise<unknown> {
+    const uid = userId ?? '';
+
     try {
-      const uid = userId ?? '';
       const status = await this.googleCalendar.getConnectionStatus(uid);
       if (status.connected) {
         return this.googleCalendar.createEvent(
+          uid,
+          args.title as string,
+          args.start_time as string,
+          args.end_time as string,
+          args.description as string,
+          args.location as string,
+          args.attendees as string[],
+        );
+      }
+    } catch { /* fall through */ }
+
+    // User connected Outlook → create on THEIR calendar via their OAuth token
+    try {
+      if (await this.outlookCalendar.hasConnection(uid)) {
+        return this.outlookCalendar.createEvent(
           uid,
           args.title as string,
           args.start_time as string,

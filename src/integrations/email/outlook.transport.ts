@@ -300,6 +300,131 @@ export class OutlookTransport {
     };
   }
 
+  // ── Additional mail operations ─────────────────────────────────────────────
+
+  /** Fetch a single email with full body. */
+  async getEmail(userId: string | undefined, messageId: string) {
+    const graphClient = await this.getClient(userId);
+    const upn = await this.getUserPrincipalName(userId);
+
+    const msg = await graphClient
+      .api(`/users/${upn}/messages/${messageId}`)
+      .select('id,subject,from,toRecipients,ccRecipients,body,bodyPreview,receivedDateTime,conversationId,isRead')
+      .get();
+
+    return {
+      success: true,
+      email: {
+        id: msg.id,
+        threadId: msg.conversationId,
+        from: msg.from?.emailAddress?.address,
+        to: msg.toRecipients?.map((r: any) => r.emailAddress.address) || [],
+        cc: msg.ccRecipients?.map((r: any) => r.emailAddress.address) || [],
+        subject: msg.subject,
+        body: msg.body?.content ?? msg.bodyPreview ?? '',
+        isRead: msg.isRead,
+        date: msg.receivedDateTime,
+      },
+    };
+  }
+
+  /** All messages in a conversation (Outlook's equivalent of a Gmail thread). */
+  async getThread(userId: string | undefined, conversationId: string) {
+    const graphClient = await this.getClient(userId);
+    const upn = await this.getUserPrincipalName(userId);
+
+    const response = await graphClient
+      .api(`/users/${upn}/messages`)
+      .filter(`conversationId eq '${conversationId.replace(/'/g, "''")}'`)
+      .select('id,subject,from,toRecipients,bodyPreview,receivedDateTime,conversationId,isRead')
+      .top(25)
+      .get();
+
+    const items = response.value || [];
+    const emails: EmailMessage[] = items.map((msg: any) => ({
+      id: msg.id,
+      threadId: msg.conversationId,
+      from: msg.from?.emailAddress?.address,
+      to: msg.toRecipients?.map((r: any) => r.emailAddress.address) || [],
+      subject: msg.subject,
+      body: msg.bodyPreview,
+      snippet: msg.bodyPreview,
+      date: msg.receivedDateTime,
+    }));
+
+    return { success: true, emails, count: emails.length };
+  }
+
+  /** Mail folders — presented to the model as "labels" for tool parity with Gmail. */
+  async listFolders(userId: string | undefined) {
+    const graphClient = await this.getClient(userId);
+    const upn = await this.getUserPrincipalName(userId);
+
+    const response = await graphClient
+      .api(`/users/${upn}/mailFolders`)
+      .top(50)
+      .get();
+
+    const labels = (response.value || []).map((f: any) => ({
+      id: f.id,
+      name: f.displayName,
+      unread: f.unreadItemCount,
+      total: f.totalItemCount,
+    }));
+
+    return { success: true, labels, count: labels.length };
+  }
+
+  /** Move a message to the Archive folder. */
+  async archive(userId: string | undefined, messageId: string) {
+    const graphClient = await this.getClient(userId);
+    const upn = await this.getUserPrincipalName(userId);
+
+    const archiveFolder = await graphClient
+      .api(`/users/${upn}/mailFolders/archive`)
+      .get();
+
+    await graphClient
+      .api(`/users/${upn}/messages/${messageId}/move`)
+      .post({ destinationId: archiveFolder.id });
+
+    return { success: true, message: 'Email archived' };
+  }
+
+  // ── Public auth helpers (used by OutlookCalendarService) ──────────────────
+
+  /** True if this user has connected an Outlook account. */
+  async hasConnection(userId?: string): Promise<boolean> {
+    if (!userId) return false;
+    const connection = await this.connectionRepo.findOne({
+      where: { userId, provider: 'outlook' },
+    });
+    return !!connection;
+  }
+
+  /** The scopes the user consented to at connect time (space-separated). */
+  async getGrantedScopes(userId?: string): Promise<string> {
+    if (!userId) return '';
+    const connection = await this.connectionRepo.findOne({
+      where: { userId, provider: 'outlook' },
+    });
+    return connection?.scope ?? '';
+  }
+
+  /**
+   * Plaintext access token for this user's Outlook connection.
+   * Auto-refreshes (and re-encrypts in the DB) when expired.
+   */
+  async getAccessTokenForUser(userId?: string): Promise<string> {
+    const connection = userId
+      ? await this.connectionRepo.findOne({ where: { userId, provider: 'outlook' } })
+      : null;
+    if (!connection) {
+      throw new Error('Outlook is not connected for this user.');
+    }
+    return this.ensureToken(connection);
+  }
+
   // ── Auth / client helpers ──────────────────────────────────────────────────
 
   private async getClient(userId?: string): Promise<Client> {
@@ -367,12 +492,19 @@ export class OutlookTransport {
       throw new Error('Microsoft OAuth is not configured.');
     }
 
-    const scope = [
-      'offline_access',
-      'https://graph.microsoft.com/Mail.ReadWrite',
-      'https://graph.microsoft.com/Mail.Send',
-      'https://graph.microsoft.com/User.Read',
-    ].join(' ');
+    // Refresh with the scopes the user actually consented to (stored at
+    // connect time). Requesting scopes beyond the original consent makes the
+    // refresh_token grant fail — so a mail-only connection keeps refreshing
+    // fine, and a mail+calendar connection keeps its calendar access.
+    const storedScope = connection.scope?.trim();
+    const scope = storedScope
+      ? (storedScope.includes('offline_access') ? storedScope : `offline_access ${storedScope}`)
+      : [
+          'offline_access',
+          'https://graph.microsoft.com/Mail.ReadWrite',
+          'https://graph.microsoft.com/Mail.Send',
+          'https://graph.microsoft.com/User.Read',
+        ].join(' ');
 
     const tokenResponse = await axios.post<TokenResponse>(
       `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`,

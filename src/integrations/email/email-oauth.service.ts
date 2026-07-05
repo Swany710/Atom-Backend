@@ -319,6 +319,10 @@ export class EmailOAuthService {
       'https://graph.microsoft.com/Mail.ReadWrite',
       'https://graph.microsoft.com/Mail.Send',
       'https://graph.microsoft.com/User.Read',
+      // Calendar access — needed for OutlookCalendarService. Users who
+      // connected before this scope was added must reconnect Outlook once
+      // to grant it (their stored token only covers Mail).
+      'https://graph.microsoft.com/Calendars.ReadWrite',
     ];
 
     const configured = this.config.get<string>('MICROSOFT_SCOPES');
