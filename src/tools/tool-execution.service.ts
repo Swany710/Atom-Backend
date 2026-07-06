@@ -624,7 +624,10 @@ export class ToolExecutionService {
       results: results.map(r => ({
         id:         r.id,
         title:      r.title,
-        excerpt:    r.content.slice(0, 600) + (r.content.length > 600 ? '…' : ''),
+        // 4000 chars ≈ a full chunked spec/install-guide section. The old
+        // 600-char excerpt cut off spec tables mid-row, forcing the LLM to
+        // guess — exactly what the KB is meant to prevent.
+        excerpt:    r.content.slice(0, 4000) + (r.content.length > 4000 ? '…' : ''),
         source:     r.source,
         category:   r.category,
         similarity: r.similarity,
@@ -758,7 +761,7 @@ export class ToolExecutionService {
   private toolToSystem(toolName: string): string {
     if (toolName.includes('email'))                       return 'gmail';
     if (toolName.includes('calendar'))                    return 'google_calendar';
-    if (toolName.startsWith('crm'))                       return 'acculynx';
+    if (toolName.includes('crm'))                         return 'acculynx';  // covers crm_* AND get_crm_*
     if (toolName === 'search_knowledge_base')             return 'knowledge_base';
     return 'unknown';
   }

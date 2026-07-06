@@ -15,7 +15,7 @@ export class ToolDefinitionsService {
       // ── Knowledge Base ──────────────────────────────────────────────
       {
         name: 'search_knowledge_base',
-        description: 'Search company knowledge base for SOPs, product info, FAQs, documents, and notes.',
+        description: 'Search the company knowledge base: manufacturer product spec library (data sheets + installation guides), SOPs, FAQs, documents, and notes. ALWAYS use this FIRST for any product-specific question (specs, ratings, installation steps, warranties) before answering from general knowledge.',
         input_schema: {
           type: 'object' as const,
           properties: {

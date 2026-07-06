@@ -82,10 +82,11 @@ export class AccuLynxService {
       jobName:       j.name ?? j.jobName ?? j.title ?? 'Unnamed Job',
       status:        j.status ?? j.jobStatus,
       milestone:     j.milestone ?? j.currentMilestone,
-      address:       j.address?.line1 ?? j.streetAddress ?? j.address,
-      city:          j.address?.city  ?? j.city,
-      state:         j.address?.state ?? j.state,
-      zip:           j.address?.zip   ?? j.postalCode,
+      // AccuLynx v2 returns the job address as locationAddress{street1,...}
+      address:       j.locationAddress?.street1 ?? j.address?.line1 ?? j.streetAddress ?? j.address,
+      city:          j.locationAddress?.city  ?? j.address?.city  ?? j.city,
+      state:         j.locationAddress?.state?.abbreviation ?? j.locationAddress?.state ?? j.address?.state ?? j.state,
+      zip:           j.locationAddress?.zipCode ?? j.address?.zip ?? j.postalCode,
       contactName:   j.contact ? `${j.contact.firstName ?? ''} ${j.contact.lastName ?? ''}`.trim() : undefined,
       contactPhone:  j.contact?.phone ?? j.primaryPhone,
       contactEmail:  j.contact?.email ?? j.primaryEmail,
@@ -103,10 +104,11 @@ export class AccuLynxService {
       lastName:  c.lastName  ?? '',
       email:     c.email     ?? c.primaryEmail,
       phone:     c.phone     ?? c.primaryPhone,
-      address:   c.address?.line1 ?? c.streetAddress,
-      city:      c.address?.city  ?? c.city,
-      state:     c.address?.state ?? c.state,
-      zip:       c.address?.zip   ?? c.postalCode,
+      // AccuLynx v2 contacts carry mailingAddress{street1,...}
+      address:   c.mailingAddress?.street1 ?? c.address?.line1 ?? c.streetAddress,
+      city:      c.mailingAddress?.city  ?? c.address?.city  ?? c.city,
+      state:     c.mailingAddress?.state?.abbreviation ?? c.address?.state ?? c.state,
+      zip:       c.mailingAddress?.zipCode ?? c.address?.zip ?? c.postalCode,
     };
   }
 
@@ -120,21 +122,29 @@ export class AccuLynxService {
   }): Promise<CrmResult<AccuLynxJob[]>> {
     if (!this.client) return this.notConfigured();
     try {
-      const p: any = { page: params?.page ?? 1, pageSize: params?.pageSize ?? 25 };
-      if (params?.status) p.status = params.status;
+      // AccuLynx v2 paginates with pageSize + pageStartIndex (record offset),
+      // not page numbers, and filters by `milestones`, not `status`.
+      const page     = params?.page ?? 1;
+      const pageSize = params?.pageSize ?? 25;
+      const p: any = { pageSize, pageStartIndex: (page - 1) * pageSize };
+      if (params?.status) p.milestones = params.status;
 
       let jobs: any[] = [];
       let total = 0;
 
       if (params?.search) {
-        // Use search endpoint for text searches
-        const res = await this.client.post('/jobs/search', { searchTerm: params.search });
-        jobs  = res.data?.jobs ?? res.data?.items ?? res.data ?? [];
-        total = res.data?.total ?? jobs.length;
+        // POST /jobs/search — pageSize capped at 25 by the API
+        const res = await this.client.post(
+          `/jobs/search?pageSize=${Math.min(pageSize, 25)}&includes=contact`,
+          { searchTerm: params.search },
+        );
+        jobs  = res.data?.items ?? res.data?.jobs ?? res.data ?? [];
+        total = res.data?.count ?? res.data?.total ?? jobs.length;
       } else {
+        p.includes = 'contact';
         const res = await this.client.get('/jobs', { params: p });
-        jobs  = res.data?.jobs ?? res.data?.items ?? res.data ?? [];
-        total = res.data?.total ?? res.data?.totalCount ?? jobs.length;
+        jobs  = res.data?.items ?? res.data?.jobs ?? res.data ?? [];
+        total = res.data?.count ?? res.data?.total ?? res.data?.totalCount ?? jobs.length;
       }
 
       return { success: true, data: jobs.map(j => this.mapJob(j)), total };
@@ -158,15 +168,14 @@ export class AccuLynxService {
   async addNote(jobId: string, note: string, authorName?: string): Promise<CrmResult> {
     if (!this.client) return this.notConfigured();
     try {
-      // AccuLynx v2 comments endpoint
-      const res = await this.client.post(`/jobs/${jobId}/comments`, {
-        text:   note,
-        author: authorName ?? 'Atom AI',
-      });
+      // AccuLynx v2: POST /jobs/{jobId}/messages { message } — created as a
+      // job comment. The API does not accept an author field, so we prefix it.
+      const message = authorName ? `[${authorName}] ${note}` : `[Atom AI] ${note}`;
+      const res = await this.client.post(`/jobs/${jobId}/messages`, { message });
       return { success: true, data: res.data, message: 'Note added successfully' };
     } catch (err: any) {
-      this.logger.error('addNote error:', err.message);
-      return { success: false, error: err.response?.data?.message ?? err.message };
+      this.logger.error('addNote error:', err.response?.data ?? err.message);
+      return { success: false, error: err.response?.data?.title ?? err.response?.data?.message ?? err.message };
     }
   }
 
@@ -179,12 +188,30 @@ export class AccuLynxService {
   }): Promise<CrmResult<AccuLynxContact[]>> {
     if (!this.client) return this.notConfigured();
     try {
-      const p: any = { page: params?.page ?? 1, pageSize: params?.pageSize ?? 25 };
-      if (params?.search) p.searchTerm = params.search;
+      const page     = params?.page ?? 1;
+      const pageSize = Math.min(params?.pageSize ?? 25, 25); // API caps at 25
+      const pageStartIndex = (page - 1) * pageSize;
 
-      const res = await this.client.get('/contacts', { params: p });
-      const contacts: any[] = res.data?.contacts ?? res.data?.items ?? res.data ?? [];
-      const total = res.data?.total ?? res.data?.totalCount ?? contacts.length;
+      let res: any;
+      if (params?.search) {
+        // AccuLynx v2 contact search is POST /contacts/search and REQUIRES
+        // sort + startDate + endDate. GET /contacts has no searchTerm filter.
+        res = await this.client.post(
+          `/contacts/search?pageSize=${pageSize}&pageStartIndex=${pageStartIndex}`,
+          {
+            searchTerm: params.search,
+            startDate:  '2000-01-01T00:00:00Z',
+            endDate:    new Date().toISOString(),
+            sort: { sortDirection: 'Descending', sortColumn: 'CreatedDate' },
+          },
+        );
+      } else {
+        res = await this.client.get('/contacts', {
+          params: { pageSize, pageStartIndex, includes: 'emailAddress,phoneNumber' },
+        });
+      }
+      const contacts: any[] = res.data?.items ?? res.data?.contacts ?? res.data ?? [];
+      const total = res.data?.count ?? res.data?.total ?? res.data?.totalCount ?? contacts.length;
       return { success: true, data: contacts.map(c => this.mapContact(c)), total };
     } catch (err: any) {
       this.logger.error('getContacts error:', err.message);
@@ -208,27 +235,81 @@ export class AccuLynxService {
   }): Promise<CrmResult> {
     if (!this.client) return this.notConfigured();
     try {
-      const payload: any = {
+      // AccuLynx v2 has no /leads endpoint. The documented flow is:
+      //   1. POST /contacts  → create the contact
+      //   2. POST /jobs { contact: { id } } → creates a job in milestone
+      //      "Lead (Unassigned)"
+      // https://apidocs.acculynx.com/reference/postcontacts
+      // https://apidocs.acculynx.com/reference/postjob
+
+      // ── 1. Create contact ────────────────────────────────────────────
+      const contactPayload: any = {
         firstName: lead.firstName,
         lastName:  lead.lastName,
-        email:     lead.email,
-        phone:     lead.phone,
-        source:    lead.source ?? 'Atom AI',
-        notes:     lead.notes,
       };
+
+      const noteParts: string[] = [];
+      if (lead.notes)  noteParts.push(lead.notes);
+      noteParts.push(`Source: ${lead.source ?? 'Atom AI'}`);
+
+      if (lead.email) {
+        contactPayload.emailAddresses = [
+          { address: lead.email, primary: true, type: 'Personal' },
+        ];
+      }
+      if (lead.phone) {
+        // API requires exactly 10 digits; otherwise stash it in the note
+        const digits = lead.phone.replace(/\D/g, '').replace(/^1(?=\d{10}$)/, '');
+        if (/^\d{10}$/.test(digits)) {
+          contactPayload.phoneNumbers = [
+            { number: digits, primary: true, type: 'Mobile' },
+          ];
+        } else {
+          noteParts.push(`Phone (unparsed): ${lead.phone}`);
+        }
+      }
       if (lead.address) {
-        payload.address = {
-          line1: lead.address,
-          city:  lead.city,
-          state: lead.state,
-          zip:   lead.zip,
+        contactPayload.mailingAddress = {
+          street1: lead.address,
+          city:    lead.city,
+          zipCode: lead.zip,
+          // state/country require AccuLynx numeric IDs — omitted; the job's
+          // locationAddress below carries the full address as strings.
         };
       }
-      const res = await this.client.post('/leads', payload);
-      return { success: true, data: res.data, message: 'Lead created successfully' };
+      contactPayload.note = noteParts.join(' | ');
+
+      const contactRes = await this.client.post('/contacts', contactPayload);
+      const contactId  = contactRes.data?.id;
+      if (!contactId) {
+        return { success: false, error: 'Contact created but no id returned by AccuLynx.' };
+      }
+
+      // ── 2. Create job in milestone Lead ──────────────────────────────
+      const jobPayload: any = {
+        contact: { id: contactId },
+        notes:   noteParts.join(' | ').slice(0, 1000),
+      };
+      // locationAddress requires street1+city+state+country+zipCode together
+      if (lead.address && lead.city && lead.state && lead.zip) {
+        jobPayload.locationAddress = {
+          street1: lead.address,
+          city:    lead.city,
+          state:   lead.state,
+          country: 'US',
+          zipCode: lead.zip,
+        };
+      }
+
+      const jobRes = await this.client.post('/jobs', jobPayload);
+      return {
+        success: true,
+        data: { contactId, jobId: jobRes.data?.id, job: jobRes.data },
+        message: 'Lead created successfully (contact + job in Lead milestone)',
+      };
     } catch (err: any) {
-      this.logger.error('createLead error:', err.message);
-      return { success: false, error: err.response?.data?.message ?? err.message };
+      this.logger.error('createLead error:', err.response?.data ?? err.message);
+      return { success: false, error: err.response?.data?.title ?? err.response?.data?.message ?? err.message };
     }
   }
 
@@ -238,7 +319,7 @@ export class AccuLynxService {
     if (!this.client) return { connected: false, message: 'ACCULYNX_API_KEY not set' };
     try {
       // Light probe — fetch 1 job to verify the key works
-      await this.client.get('/jobs', { params: { page: 1, pageSize: 1 } });
+      await this.client.get('/jobs', { params: { pageSize: 1, pageStartIndex: 0 } });
       return { connected: true };
     } catch (err: any) {
       const status = err.response?.status;
