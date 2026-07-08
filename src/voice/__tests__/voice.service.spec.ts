@@ -3,7 +3,7 @@
  *
  * Verifies that VoiceOrchestratorService correctly:
  *   - delegates to ClaudeOrchestratorService for LLM calls
- *   - calls OpenAiTranscriptionService for STT/TTS
+ *   - calls ElevenLabsTranscriptionService for STT/TTS
  *   - persists conversation history via ConversationMemoryService
  *
  * (Previously this file tested VoiceService directly. VoiceService is now a
@@ -12,7 +12,7 @@
 
 import { VoiceOrchestratorService } from '../voice-orchestrator.service';
 import { ClaudeOrchestratorService } from '../../claude/claude-orchestrator.service';
-import { OpenAiTranscriptionService } from '../../transcription/openai-transcription.service';
+import { ElevenLabsTranscriptionService } from '../../transcription/elevenlabs-transcription.service';
 import { ConversationMemoryService } from '../../conversations/conversation-memory.service';
 import type { MessageParam } from '@anthropic-ai/sdk/resources/messages';
 
@@ -41,7 +41,7 @@ function makeOrchestratorMock(
 function makeTranscriptionMock(
   transcription = 'Transcribed speech',
   audioBuffer?: Buffer,
-): jest.Mocked<Pick<OpenAiTranscriptionService, 'transcribe' | 'synthesise' | 'generateSpeech'>> {
+): jest.Mocked<Pick<ElevenLabsTranscriptionService, 'transcribe' | 'synthesise' | 'generateSpeech'>> {
   return {
     transcribe:     jest.fn().mockResolvedValue(transcription),
     synthesise:     jest.fn().mockResolvedValue(audioBuffer ?? undefined),
@@ -62,7 +62,7 @@ function buildService(
 ): VoiceOrchestratorService {
   return new VoiceOrchestratorService(
     orchestrator  as unknown as ClaudeOrchestratorService,
-    transcription as unknown as OpenAiTranscriptionService,
+    transcription as unknown as ElevenLabsTranscriptionService,
     memory        as unknown as ConversationMemoryService,
   );
 }

@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ClaudeOrchestratorService } from '../claude/claude-orchestrator.service';
-import { OpenAiTranscriptionService } from '../transcription/openai-transcription.service';
+import { ElevenLabsTranscriptionService } from '../transcription/elevenlabs-transcription.service';
 import { ConversationMemoryService } from '../conversations/conversation-memory.service';
 import type { ProcessResult } from './voice.service';
 
@@ -22,14 +22,14 @@ import type { ProcessResult } from './voice.service';
  *
  * ┌────────────────────────────────────────────────────────┐
  * │  Voice pipeline (standard)                             │
- * │    audio ──► Whisper STT                               │
+ * │    audio ──► ElevenLabs Scribe STT                     │
  * │           ──► ClaudeOrchestrator.runChat()             │
- * │           ──► OpenAI TTS ──► audio/mpeg                │
+ * │           ──► ElevenLabs TTS ──► audio/mpeg            │
  * └────────────────────────────────────────────────────────┘
  *
  * ┌────────────────────────────────────────────────────────┐
  * │  Voice pipeline (fast — CHUNK 13)                      │
- * │    audio ──► Whisper STT                               │
+ * │    audio ──► ElevenLabs Scribe STT                     │
  * │           ──► ClaudeOrchestrator.streamChat()          │
  * │           ──► sentence detection                       │
  * │           ──► TTS s1 │                                 │
@@ -44,7 +44,7 @@ export class VoiceOrchestratorService {
 
   constructor(
     private readonly orchestrator: ClaudeOrchestratorService,
-    private readonly transcription: OpenAiTranscriptionService,
+    private readonly transcription: ElevenLabsTranscriptionService,
     private readonly memory: ConversationMemoryService,
   ) {}
 

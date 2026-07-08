@@ -1,8 +1,8 @@
 import { Module } from '@nestjs/common';
-import { OpenAiTranscriptionService } from './openai-transcription.service';
+import { ElevenLabsTranscriptionService } from './elevenlabs-transcription.service';
 
 @Module({
-  providers: [OpenAiTranscriptionService],
-  exports: [OpenAiTranscriptionService],
+  providers: [ElevenLabsTranscriptionService],
+  exports: [ElevenLabsTranscriptionService],
 })
 export class TranscriptionModule {}

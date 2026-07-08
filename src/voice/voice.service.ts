@@ -21,7 +21,7 @@ export interface ProcessResult {
  *     └─► VoiceService          (facade — this file)
  *           └─► VoiceOrchestratorService  (owns STT → LLM → TTS pipeline)
  *                 ├─► ClaudeOrchestratorService  (LLM adapter + tool-use loop)
- *                 ├─► OpenAiTranscriptionService  (Whisper STT + TTS)
+ *                 ├─► ElevenLabsTranscriptionService  (Scribe STT + ElevenLabs TTS)
  *                 └─► ConversationMemoryService   (PostgreSQL history)
  */
 @Injectable()
