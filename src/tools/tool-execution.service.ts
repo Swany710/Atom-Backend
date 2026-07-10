@@ -8,6 +8,7 @@ import { GoogleCalendarService } from '../integrations/calendar/google-calendar.
 import { OutlookCalendarService } from '../integrations/calendar/outlook-calendar.service';
 import { AccuLynxService } from '../integrations/crm/acculynx.service';
 import { KnowledgeBaseService } from '../knowledge-base/knowledge-base.service';
+import { NotesService } from '../notes/notes.service';
 import { ToolDefinitionsService } from './tool-definitions.service';
 import { PendingActionService, ConfirmationRequired } from '../pending-actions/pending-action.service';
 import { AuditService } from '../audit/audit.service';
@@ -51,6 +52,7 @@ export class ToolExecutionService {
     private readonly googleCalendar: GoogleCalendarService,
     private readonly accuLynx: AccuLynxService,
     private readonly knowledgeBase: KnowledgeBaseService,
+    private readonly notes: NotesService,
     private readonly toolDefs: ToolDefinitionsService,
     private readonly pendingActions: PendingActionService,
     private readonly audit: AuditService,
@@ -316,6 +318,12 @@ export class ToolExecutionService {
           'acculynx.createLead',
         );
 
+      case 'delete_note':
+        return providerWrite(
+          () => this.notes.delete(userId, args.noteId as string),
+          'notes.delete',
+        );
+
       default:
         return { error: 'Unknown write tool', toolName };
     }
@@ -339,6 +347,32 @@ export class ToolExecutionService {
           ),
           'knowledge_base.search',
         );
+
+      // ── Personal notes ────────────────────────────────────────────────
+      // create_note executes on the read path DELIBERATELY: personal notes
+      // save instantly without the confirmation gate (user preference).
+      // It is still audited below. delete_note goes through the write path.
+      case 'create_note': {
+        const result = await this.notes.create(
+          userId,
+          args.content as string,
+          args.title as string | undefined,
+        );
+        this.audit.logWrite({
+          action:        'note_create',
+          userId,
+          targetSystem:  'notes',
+          argsSnapshot:  this.sanitiseArgs(args),
+          resultSummary: result.success ? `Note saved: ${result.note?.id}` : `FAILED: ${result.error}`,
+        });
+        return result;
+      }
+
+      case 'list_notes':
+        return this.notes.list(userId, {
+          search: args.search as string | undefined,
+          limit:  (args.limit as number) ?? 20,
+        });
 
       case 'read_emails': {
         const provider = await this.userEmailProvider(userId);
@@ -736,6 +770,8 @@ export class ToolExecutionService {
         return `Add note to CRM job ${args.jobId}`;
       case 'crm_create_lead':
         return `Create CRM lead for ${args.firstName} ${args.lastName}`;
+      case 'delete_note':
+        return `Delete personal note ${args.noteId}`;
       default:
         return `Execute ${toolName}`;
     }
@@ -754,6 +790,7 @@ export class ToolExecutionService {
       delete_calendar_event:  'calendar_event_delete',
       crm_add_note:           'crm_note_add',
       crm_create_lead:        'crm_lead_create',
+      delete_note:            'note_delete',
     };
     return map[toolName] ?? 'knowledge_base_write';
   }
@@ -761,7 +798,8 @@ export class ToolExecutionService {
   private toolToSystem(toolName: string): string {
     if (toolName.includes('email'))                       return 'gmail';
     if (toolName.includes('calendar'))                    return 'google_calendar';
-    if (toolName.includes('crm'))                         return 'acculynx';  // covers crm_* AND get_crm_*
+    if (toolName.includes('crm'))                         return 'acculynx';  // covers crm_* AND get_crm_* (before the notes check — crm_add_note is CRM)
+    if (toolName.endsWith('_note') || toolName === 'list_notes') return 'notes';
     if (toolName === 'search_knowledge_base')             return 'knowledge_base';
     return 'unknown';
   }

@@ -1,6 +1,9 @@
 import {
   Controller,
   Get,
+  Post,
+  Body,
+  Param,
   Query,
   Req,
   UnauthorizedException,
@@ -13,6 +16,7 @@ import { User } from '../users/user.entity';
 import { PendingAction } from '../pending-actions/pending-action.entity';
 import { ChatMemory } from '../conversations/chat-memory.entity';
 import { ScheduledTask } from '../scheduled-tasks/scheduled-task.entity';
+import { InviteCodesService } from '../auth/invite-codes.service';
 
 /**
  * AdminController — cross-user read-only admin endpoints.
@@ -36,6 +40,7 @@ export class AdminController {
     @InjectRepository(ScheduledTask)
     private readonly scheduledTasks: Repository<ScheduledTask>,
     private readonly config: ConfigService,
+    private readonly inviteCodes: InviteCodesService,
   ) {}
 
   /** Only allow API-key auth mode — reject JWT users from admin endpoints */
@@ -218,6 +223,58 @@ export class AdminController {
       })),
       count: messages.length,
     };
+  }
+
+  /**
+   * GET /admin/invite-codes
+   * All invite codes with status and who used them.
+   */
+  @Get('invite-codes')
+  @ApiOperation({ summary: 'List all registration invite codes' })
+  async listInviteCodes(@Req() req: any) {
+    this.requireApiKey(req);
+    const codes = await this.inviteCodes.listAll();
+    return {
+      codes: codes.map(c => ({
+        id:          c.id,
+        code:        c.code,
+        label:       c.label ?? null,
+        status:      c.status,
+        usedByEmail: c.usedByEmail ?? null,
+        usedAt:      c.usedAt ?? null,
+        createdAt:   c.createdAt,
+      })),
+      count: codes.length,
+      masterEnvCodeConfigured: !!process.env.REGISTRATION_INVITE_CODE,
+    };
+  }
+
+  /**
+   * POST /admin/invite-codes  { label? }
+   * Create a new single-use invite code.
+   */
+  @Post('invite-codes')
+  @ApiOperation({ summary: 'Create a single-use invite code' })
+  async createInviteCode(@Req() req: any, @Body() body: { label?: string }) {
+    this.requireApiKey(req);
+    const invite = await this.inviteCodes.create(body?.label);
+    return {
+      success: true,
+      code:    invite.code,
+      id:      invite.id,
+      label:   invite.label ?? null,
+    };
+  }
+
+  /**
+   * POST /admin/invite-codes/:id/revoke
+   * Revoke an unused invite code.
+   */
+  @Post('invite-codes/:id/revoke')
+  @ApiOperation({ summary: 'Revoke an unused invite code' })
+  async revokeInviteCode(@Req() req: any, @Param('id') id: string) {
+    this.requireApiKey(req);
+    return this.inviteCodes.revoke(id);
   }
 
   /**

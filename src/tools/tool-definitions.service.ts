@@ -359,6 +359,42 @@ export class ToolDefinitionsService {
         },
       },
 
+      // ── Personal notes ─────────────────────────────────────────────
+      {
+        name: 'create_note',
+        description: 'Save a personal note for the user. Use whenever the user says things like "note that...", "make a note...", "write this down", "remember for later". Saves INSTANTLY — no confirmation needed. Confirm to the user after saving.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            content: { type: 'string', description: 'The note text' },
+            title:   { type: 'string', description: 'Optional short title' },
+          },
+          required: ['content'],
+        },
+      },
+      {
+        name: 'list_notes',
+        description: "List or search the user's saved personal notes.",
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            search: { type: 'string', description: 'Optional text filter' },
+            limit:  { type: 'number', description: 'Max notes to return (default 20)' },
+          },
+        },
+      },
+      {
+        name: 'delete_note',
+        description: 'Delete one of the user\'s personal notes by id (get the id from list_notes). REQUIRE confirmation before calling.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            noteId: { type: 'string', description: 'The id of the note to delete' },
+          },
+          required: ['noteId'],
+        },
+      },
+
       // ── General ────────────────────────────────────────────────────
       {
         name: 'get_general_info',
@@ -386,6 +422,9 @@ export class ToolDefinitionsService {
     'delete_calendar_event',
     'crm_add_note',
     'crm_create_lead',
+    // create_note is deliberately NOT here — personal notes save instantly
+    // (user preference); deleting a note still requires confirmation.
+    'delete_note',
   ]);
 
   isWriteTool(name: string): boolean {

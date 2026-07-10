@@ -148,6 +148,11 @@
   .pill.ok        { background: rgba(63,185,80,.15);   color: var(--green);  border: 1px solid rgba(63,185,80,.3); }
   .pill.error     { background: rgba(248,81,73,.15);   color: var(--red);    border: 1px solid rgba(248,81,73,.3); }
   .pill.user      { background: rgba(88,166,255,.12);  color: var(--accent); border: 1px solid rgba(88,166,255,.3); }
+  .pill.active    { background: rgba(63,185,80,.15);   color: var(--green);  border: 1px solid rgba(63,185,80,.3); }
+  .pill.used      { background: rgba(139,148,158,.15); color: var(--text-muted); border: 1px solid var(--border); }
+  .pill.revoked   { background: rgba(248,81,73,.15);   color: var(--red);    border: 1px solid rgba(248,81,73,.3); }
+  .code-chip      { font-family: monospace; font-size: 13px; background: rgba(88,166,255,.08); border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px; cursor: pointer; }
+  .code-chip:hover { border-color: var(--accent); }
   .pill.assistant { background: rgba(188,140,255,.12); color: var(--purple); border: 1px solid rgba(188,140,255,.3); }
   .pill.verified  { background: rgba(63,185,80,.15);   color: var(--green);  border: 1px solid rgba(63,185,80,.3); }
   .pill.unverified{ background: rgba(139,148,158,.15); color: var(--text-muted); border: 1px solid var(--border); }
@@ -223,6 +228,7 @@
 <nav>
   <button class="tab active" data-tab="overview">Overview</button>
   <button class="tab" data-tab="users">Users</button>
+  <button class="tab" data-tab="invites">Invites</button>
   <button class="tab" data-tab="pending">Pending Actions</button>
   <button class="tab" data-tab="integrations">Integrations</button>
   <button class="tab" data-tab="activity">Activity</button>
@@ -266,6 +272,31 @@
         <tbody id="users-tbody"><tr><td colspan="6" class="loading">Loading…</td></tr></tbody>
       </table>
     </div>
+  </div>
+
+  <!-- ══ INVITES ══ -->
+  <div id="tab-invites" class="section">
+    <div class="section-header">
+      <h2>Invite Codes</h2>
+      <button class="refresh-btn" onclick="loadInvites()">↻ Refresh</button>
+    </div>
+    <div id="invites-error"></div>
+    <div class="filter-bar">
+      <label>Label (who it's for):</label>
+      <input id="invite-label" type="text" placeholder="e.g. Jake — new sales rep" style="width:260px;" />
+      <button class="refresh-btn" onclick="createInvite()">+ Create invite code</button>
+      <span id="invite-created" style="margin-left:8px;"></span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Code</th><th>Label</th><th>Status</th><th>Used By</th><th>Used</th><th>Created</th><th></th></tr></thead>
+        <tbody id="invites-tbody"><tr><td colspan="7" class="loading">Loading…</td></tr></tbody>
+      </table>
+    </div>
+    <p style="color:var(--text-muted);font-size:12px;margin-top:8px;">
+      Codes are single-use. Click a code to copy it. Send the code plus the app link to the person you're inviting —
+      they enter it in the "Invite code" field when creating their account.
+    </p>
   </div>
 
   <!-- ══ PENDING ACTIONS ══ -->
@@ -395,10 +426,77 @@ function pill(status) { return `<span class="pill ${status}">${status}</span>`; 
 const tabLoaders = {
   overview:     () => { loadStats(); loadOverviewHealth(); loadRecentActions(); },
   users:        loadUsers,
+  invites:      loadInvites,
   pending:      loadPendingActions,
   integrations: loadIntegrations,
   activity:     loadActivity,
 };
+
+// ─── Invite codes ─────────────────────────────────────────────
+async function loadInvites() {
+  showError('invites-error', '');
+  const tbody = document.getElementById('invites-tbody');
+  tbody.innerHTML = '<tr><td colspan="7" class="loading">Loading…</td></tr>';
+  try {
+    const data = await api('/admin/invite-codes');
+    if (!data.codes.length) {
+      tbody.innerHTML = '<tr><td colspan="7" class="loading">No invite codes yet — create one above.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = data.codes.map(c => `
+      <tr>
+        <td><span class="code-chip" title="Click to copy" onclick="copyCode('${c.code}', this)">${c.code}</span></td>
+        <td>${c.label ?? '—'}</td>
+        <td>${pill(c.status)}</td>
+        <td>${c.usedByEmail ?? '—'}</td>
+        <td>${c.usedAt ? fmt(c.usedAt) : '—'}</td>
+        <td>${fmt(c.createdAt)}</td>
+        <td>${c.status === 'active'
+              ? `<button class="refresh-btn" onclick="revokeInvite('${c.id}')">Revoke</button>`
+              : ''}</td>
+      </tr>`).join('');
+  } catch (e) {
+    showError('invites-error', e.message);
+    tbody.innerHTML = '<tr><td colspan="7" class="loading">—</td></tr>';
+  }
+}
+
+async function createInvite() {
+  const labelEl = document.getElementById('invite-label');
+  const out     = document.getElementById('invite-created');
+  out.textContent = '…';
+  try {
+    const res = await api('/admin/invite-codes', {
+      method: 'POST',
+      body:   JSON.stringify({ label: labelEl.value.trim() || undefined }),
+    });
+    out.innerHTML = `Created: <span class="code-chip" onclick="copyCode('${res.code}', this)">${res.code}</span>`;
+    labelEl.value = '';
+    loadInvites();
+  } catch (e) {
+    out.textContent = '';
+    showError('invites-error', e.message);
+  }
+}
+
+async function revokeInvite(id) {
+  if (!confirm('Revoke this invite code? It will no longer work.')) return;
+  try {
+    const res = await api(`/admin/invite-codes/${id}/revoke`, { method: 'POST' });
+    if (res.success === false) showError('invites-error', res.error || 'Could not revoke.');
+    loadInvites();
+  } catch (e) {
+    showError('invites-error', e.message);
+  }
+}
+
+function copyCode(code, el) {
+  navigator.clipboard?.writeText(code).then(() => {
+    const orig = el.textContent;
+    el.textContent = '✓ copied';
+    setTimeout(() => { el.textContent = orig; }, 1200);
+  });
+}
 
 document.querySelectorAll('.tab').forEach(btn => {
   btn.addEventListener('click', () => {

@@ -32,6 +32,9 @@ export type AuditAction =
   | 'knowledge_base_read'
   | 'knowledge_base_write'
   | 'knowledge_base_delete'
+  // ── Personal notes ─────────────────────────────────────────────────────
+  | 'note_create'
+  | 'note_delete'
   // ── Pending actions ────────────────────────────────────────────────────
   | 'pending_action_created'
   | 'pending_action_confirmed'

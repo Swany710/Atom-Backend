@@ -8,8 +8,8 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBody, ApiResponse } from '@nestjs/swagger';
-import * as crypto from 'crypto';
 import { AuthService } from './auth.service';
+import { InviteCodesService } from './invite-codes.service';
 import { Public } from '../decorators/public.decorator';
 
 interface RegisterDto {
@@ -24,19 +24,13 @@ interface LoginDto {
   password: string;
 }
 
-/** Constant-time compare (same rationale as ApiKeyGuard). */
-function timingSafeEquals(a: string, b: string): boolean {
-  const ha = crypto.createHash('sha256').update(a).digest();
-  const hb = crypto.createHash('sha256').update(b).digest();
-  return crypto.timingSafeEqual(ha, hb);
-}
-
 /**
  * Auth endpoints — both are public (no API key required).
  *
- * POST /auth/register  — INVITE-ONLY: requires a valid inviteCode matching the
- *                        REGISTRATION_INVITE_CODE env var. If that env var is
- *                        unset, registration is disabled entirely (403). This
+ * POST /auth/register  — INVITE-ONLY: requires a valid single-use invite code
+ *                        (created in the admin dashboard) OR the master
+ *                        REGISTRATION_INVITE_CODE env var. If neither exists,
+ *                        registration is disabled entirely (403). This
  *                        prevents strangers from self-registering and reaching
  *                        company-global tools (AccuLynx CRM, knowledge base).
  * POST /auth/login     — authenticate and receive an access token
@@ -45,7 +39,10 @@ function timingSafeEquals(a: string, b: string): boolean {
 @ApiTags('Auth')
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly inviteCodes: InviteCodesService,
+  ) {}
 
   @Post('register')
   @ApiOperation({ summary: 'Register a new user account (invite-only)' })
@@ -56,11 +53,11 @@ export class AuthController {
   @ApiResponse({ status: 409, description: 'Email already in use' })
   async register(@Body() body: RegisterDto) {
     // ── Invite gate ──────────────────────────────────────────────────────
-    const inviteCode = process.env.REGISTRATION_INVITE_CODE;
-    if (!inviteCode) {
+    if (!(await this.inviteCodes.registrationEnabled())) {
       throw new ForbiddenException('Registration is currently disabled.');
     }
-    if (!body?.inviteCode || !timingSafeEquals(body.inviteCode, inviteCode)) {
+    const invite = await this.inviteCodes.peek(body?.inviteCode ?? '');
+    if (!invite) {
       throw new ForbiddenException('A valid invite code is required to register.');
     }
 
@@ -69,7 +66,16 @@ export class AuthController {
     if (body.password.length < 8) {
       throw new BadRequestException('password must be at least 8 characters');
     }
-    return this.authService.register(body.email, body.password, body.displayName);
+
+    const tokens = await this.authService.register(body.email, body.password, body.displayName);
+
+    // Consume the single-use code only AFTER a successful registration, so a
+    // failed attempt (e.g. duplicate email) doesn't burn the invite.
+    if (invite !== 'env') {
+      await this.inviteCodes.consume(invite.id, tokens.userId, tokens.email);
+    }
+
+    return tokens;
   }
 
   @Post('login')
