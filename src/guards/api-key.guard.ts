@@ -99,6 +99,12 @@ export class ApiKeyGuard implements CanActivate {
       const apiKey = this.config.get<string>('API_KEY');
       if (apiKey) {
         if (!timingSafeEquals(token, apiKey)) {
+          // A three-part token is a JWT that failed verification above —
+          // almost always an EXPIRED login session, not an API-key problem.
+          // Say so, instead of the misleading "Invalid API key".
+          if (token.split('.').length === 3) {
+            throw new UnauthorizedException('Session expired — please sign in again.');
+          }
           throw new UnauthorizedException('Invalid or missing API key');
         }
         const ownerId = this.config.get<string>('OWNER_USER_ID');
