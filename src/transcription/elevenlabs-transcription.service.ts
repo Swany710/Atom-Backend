@@ -85,7 +85,8 @@ export class ElevenLabsTranscriptionService {
       contentType: mimeType || 'audio/mpeg',
     });
 
-    const res = await providerAudio(
+    // axios is require()'d (any), so providerAudio<T> infers T=unknown — annotate.
+    const res: any = await providerAudio(
       () => axios.post(`${this.baseUrl}/speech-to-text`, form, {
         headers: { 'xi-api-key': this.apiKey, ...form.getHeaders() },
         timeout: 30_000,
@@ -136,7 +137,7 @@ export class ElevenLabsTranscriptionService {
     if (!this.apiKey) throw new Error('ELEVENLABS_API_KEY not configured');
     const cleaned = this.cleanForTts(text);
 
-    const res = await providerAudio(
+    const res: any = await providerAudio(
       () => axios.post(
         `${this.baseUrl}/text-to-speech/${this.voiceIdFor(voice)}`,
         {
