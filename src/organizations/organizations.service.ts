@@ -57,6 +57,33 @@ export class OrganizationsService {
   }
 
   /**
+   * Change a member's role (owner grants/revokes admin).
+   * Rules: caller is 'owner' (controller-enforced); target must be in the
+   * caller's org; only member ↔ admin transitions — ownership never moves
+   * through this endpoint; the owner cannot change their own role.
+   */
+  async setMemberRole(
+    callerUserId: string,
+    memberUserId: string,
+    role: 'admin' | 'member',
+  ): Promise<{ success: boolean }> {
+    const orgId = this.tenantContext.orgIdOrFail();
+    if (callerUserId === memberUserId) {
+      throw new NotFoundException('You cannot change your own role.');
+    }
+    const member = await this.userRepo.findOne({
+      where: { id: memberUserId, orgId },
+    });
+    if (!member) throw new NotFoundException('User not found in your organization');
+    if (member.role === 'owner') {
+      throw new NotFoundException('The org owner role cannot be changed here.');
+    }
+    member.role = role;
+    await this.userRepo.save(member);
+    return { success: true };
+  }
+
+  /**
    * Map a member of the current org to an AccuLynx user (CRM-ACCESS-POLICY.md).
    * Caller must be owner/admin (enforced by RolesGuard on the controller).
    * Pass null to clear the mapping.

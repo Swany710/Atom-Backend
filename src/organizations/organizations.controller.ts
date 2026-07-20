@@ -5,6 +5,7 @@ import {
   Param,
   Patch,
   Post,
+  Req,
   UseGuards,
   BadRequestException,
 } from '@nestjs/common';
@@ -47,6 +48,24 @@ export class OrganizationsController {
   @ApiOperation({ summary: 'Create an invite code that joins THIS org as member' })
   createInvite(@Body() body: { label?: string }) {
     return this.orgs.createInvite(body?.label);
+  }
+
+  /**
+   * PATCH /api/v1/orgs/members/:id/role — owner grants/revokes admin.
+   * Body: { role: "admin" | "member" }
+   */
+  @Patch('members/:id/role')
+  @Roles('owner')
+  @ApiOperation({ summary: "Change a member's role (owner only)" })
+  setMemberRole(
+    @Req() req: any,
+    @Param('id') memberUserId: string,
+    @Body() body: { role: string },
+  ) {
+    if (body?.role !== 'admin' && body?.role !== 'member') {
+      throw new BadRequestException("role must be 'admin' or 'member'");
+    }
+    return this.orgs.setMemberRole(req.atomUserId, memberUserId, body.role);
   }
 
   /**
