@@ -43,13 +43,17 @@ export class AccuLynxController {
     return this.crm.listCompanyUsers();
   }
 
-  /** GET /api/v1/integrations/crm/jobs — members see only their assigned jobs */
+  /**
+   * GET /api/v1/integrations/crm/jobs — members always see only their
+   * assigned jobs; owner/admin see all unless ?mine=true ("My jobs" view).
+   */
   @Get('jobs')
   async getJobs(
     @Query('page')     page     = '1',
     @Query('pageSize') pageSize = '25',
     @Query('status')   status?: string,
     @Query('search')   search?: string,
+    @Query('mine')     mine?: string,
   ) {
     const denied = await this.policy.checkCrmAccess();
     if (denied) return denied;
@@ -59,7 +63,7 @@ export class AccuLynxController {
       status,
       search,
     });
-    return this.policy.filterJobList(result);
+    return this.policy.filterJobList(result, mine === 'true' || mine === '1');
   }
 
   /** GET /api/v1/integrations/crm/jobs/:id */

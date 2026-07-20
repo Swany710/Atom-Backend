@@ -87,14 +87,26 @@ export class CrmAccessPolicyService {
 
   /**
    * Post-filter a job list for members: keep only jobs where the caller is
-   * an assigned rep. Owner/admin lists pass through untouched.
-   * Bounded: pageSize caps at 25, so at most 25 rep lookups per call.
+   * an assigned rep. Owner/admin lists pass through untouched — unless
+   * `force` is set (the "My jobs" view), which applies the caller's mapping
+   * regardless of role. Rep lookups are 60s-cached in AccuLynxService.
    */
-  async filterJobList(result: CrmResult<AccuLynxJob[]>): Promise<CrmResult<AccuLynxJob[]>> {
-    if (!result.success || this.isPrivileged()) return result;
+  async filterJobList(
+    result: CrmResult<AccuLynxJob[]>,
+    force = false,
+  ): Promise<CrmResult<AccuLynxJob[]>> {
+    if (!result.success || (this.isPrivileged() && !force)) return result;
 
     const mapping = await this.callerAcculynxUserId();
-    if (!mapping) return CrmAccessPolicyService.DENIED_UNMAPPED;
+    if (!mapping) {
+      return force && this.isPrivileged()
+        ? {
+            success: false,
+            error:
+              'Your account is not linked to an AccuLynx user yet — link it in Team & Access to use the My Jobs view.',
+          }
+        : CrmAccessPolicyService.DENIED_UNMAPPED;
+    }
 
     const jobs = result.data ?? [];
     const kept: AccuLynxJob[] = [];

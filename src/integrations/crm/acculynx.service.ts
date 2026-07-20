@@ -293,21 +293,35 @@ export class AccuLynxService {
     }
   }
 
+  /** jobId → {ids, at} — 60s cache so list filtering doesn't hammer AccuLynx.
+   *  Short TTL on purpose: rep assignment is an authz input (CRM-ACCESS-POLICY). */
+  private readonly repCache = new Map<string, { ids: string[]; at: number }>();
+  private static readonly REP_TTL_MS = 60_000;
+
   /**
    * AccuLynx user IDs assigned as reps on a job (CRM-ACCESS-POLICY.md).
    * IMPORTANT: unassigned jobs return HTTP 404 from this endpoint (verified
    * live 2026-07-19) — that means "no reps", not an error.
    */
   async getJobRepresentativeIds(jobId: string): Promise<CrmResult<string[]>> {
-    const { client } = await this.getClient();
+    const { client, cacheKey } = await this.getClient();
     if (!client) return this.notConfigured();
+
+    const key = `${cacheKey}:${jobId}`;
+    const hit = this.repCache.get(key);
+    if (hit && Date.now() - hit.at < AccuLynxService.REP_TTL_MS) {
+      return { success: true, data: hit.ids };
+    }
+
     try {
       const res = await client.get(`/jobs/${jobId}/representatives`);
       const items: any[] = res.data?.items ?? [];
       const ids = items.map(r => r?.user?.id).filter(Boolean);
+      this.repCache.set(key, { ids, at: Date.now() });
       return { success: true, data: ids };
     } catch (err: any) {
       if (err.response?.status === 404) {
+        this.repCache.set(key, { ids: [], at: Date.now() });
         return { success: true, data: [] }; // unassigned job
       }
       this.logger.error('getJobRepresentativeIds error:', err.message);
