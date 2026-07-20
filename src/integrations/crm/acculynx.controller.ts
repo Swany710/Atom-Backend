@@ -101,6 +101,18 @@ export class AccuLynxController {
     });
   }
 
+  /**
+   * GET /api/v1/integrations/crm/job-settings — company lookup lists
+   * (trade types, work types, job categories, lead sources, priorities)
+   * for the New Lead form dropdowns.
+   */
+  @Get('job-settings')
+  async getJobSettings() {
+    const denied = await this.policy.checkCrmAccess();
+    if (denied) return denied;
+    return this.crm.getJobSettings();
+  }
+
   /** POST /api/v1/integrations/crm/leads — auto-assigns to the creator's mapped AccuLynx user */
   @Post('leads')
   async createLead(@Body() body: {
@@ -114,6 +126,11 @@ export class AccuLynxController {
     zip?:       string;
     source?:    string;
     notes?:     string;
+    priority?:    string;
+    jobCategory?: string;
+    workType?:    string;
+    tradeTypes?:  string[];
+    leadSource?:  string;
   }) {
     const denied = await this.policy.checkCrmAccess();
     if (denied) return denied;

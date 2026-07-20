@@ -275,15 +275,32 @@ export class ToolDefinitionsService {
       },
       {
         name: 'crm_create_lead',
-        description: 'Create a new lead in AccuLynx. REQUIRE confirmation before calling.',
+        description:
+          'Create a new lead/job in AccuLynx. REQUIRE confirmation before calling. ' +
+          'Collect as much as the user knows: customer name, phone, email, full job address ' +
+          '(street, city, state, zip), and the job details — trade type(s) (e.g. Roofing, Siding, ' +
+          'Gutters, Windows), work type (e.g. Insurance, Retail, Repair, New, Inspection), ' +
+          'job category (e.g. Residential, Commercial), priority (Normal/High/Urgent), lead source, ' +
+          'and any notes. Pass names as plain text — they are matched to the company\'s AccuLynx ' +
+          'settings automatically. Only firstName/lastName are required; create the lead with ' +
+          'whatever the user has rather than blocking on missing fields. The new job is ' +
+          'auto-assigned to the requesting user\'s AccuLynx account.',
         input_schema: {
           type: 'object' as const,
           properties: {
-            firstName:       { type: 'string' },
-            lastName:        { type: 'string' },
-            email:           { type: 'string' },
-            phone:           { type: 'string' },
-            address:         { type: 'string' },
+            firstName:   { type: 'string' },
+            lastName:    { type: 'string' },
+            email:       { type: 'string' },
+            phone:       { type: 'string', description: '10-digit US phone' },
+            address:     { type: 'string', description: 'street address' },
+            city:        { type: 'string' },
+            state:       { type: 'string', description: '2-letter state, e.g. MN' },
+            zip:         { type: 'string' },
+            priority:    { type: 'string', enum: ['Normal', 'High', 'Urgent'] },
+            jobCategory: { type: 'string', description: 'e.g. Residential, Commercial' },
+            workType:    { type: 'string', description: 'e.g. Insurance, Repair, New' },
+            tradeTypes:  { type: 'array', items: { type: 'string' }, description: 'e.g. ["Roofing","Siding"]' },
+            leadSource:  { type: 'string', description: 'how the lead found the company' },
             notes:           { type: 'string' },
             pendingActionId: { type: 'string' },
           },

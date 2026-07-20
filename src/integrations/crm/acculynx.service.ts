@@ -57,6 +57,14 @@ export interface CrmResult<T = any> {
   error?:   string;
 }
 
+export interface JobSettings {
+  tradeTypes:    Array<{ id: string; name: string }>;
+  workTypes:     Array<{ id: number; name: string }>;
+  jobCategories: Array<{ id: number; name: string }>;
+  leadSources:   Array<{ id: string; name: string }>;
+  priorities:    string[];
+}
+
 interface OrgClientCacheEntry {
   client: any | null;
   at: number;
@@ -431,6 +439,71 @@ export class AccuLynxService {
     }
   }
 
+  // ── Company job settings (lookups for full job creation) ─────────────────
+
+  /** cacheKey → settings; 10 min TTL (company settings rarely change) */
+  private readonly settingsCache = new Map<string, { data: JobSettings; at: number }>();
+  private static readonly SETTINGS_TTL_MS = 10 * 60_000;
+
+  /**
+   * Company lookup lists needed to create a fully-specified job:
+   * trade types (uuid), work types (int), job categories (int),
+   * lead sources (uuid, may have children). Verified live 2026-07-20.
+   */
+  async getJobSettings(): Promise<CrmResult<JobSettings>> {
+    const { client, cacheKey } = await this.getClient();
+    if (!client) return this.notConfigured();
+
+    const hit = this.settingsCache.get(cacheKey);
+    if (hit && Date.now() - hit.at < AccuLynxService.SETTINGS_TTL_MS) {
+      return { success: true, data: hit.data };
+    }
+
+    try {
+      const [trades, works, cats, sources] = await Promise.all([
+        client.get('/company-settings/job-file-settings/trade-types', { params: { pageSize: 100 } }),
+        client.get('/company-settings/job-file-settings/work-types',  { params: { pageSize: 100 } }),
+        client.get('/company-settings/job-file-settings/job-categories', { params: { pageSize: 100 } }),
+        client.get('/company-settings/leads/lead-sources', { params: { pageSize: 100 } }),
+      ]);
+
+      // Flatten lead-source children into selectable entries ("Parent — Child")
+      const leadSources: Array<{ id: string; name: string }> = [];
+      for (const s of sources.data?.items ?? []) {
+        leadSources.push({ id: s.id, name: s.name });
+        for (const c of s.children ?? []) {
+          leadSources.push({ id: c.id, name: `${s.name} — ${c.name}` });
+        }
+      }
+
+      const data: JobSettings = {
+        tradeTypes:    (trades.data?.items ?? []).map((t: any) => ({ id: t.id ?? t.tradeId, name: t.name })),
+        workTypes:     (works.data?.items ?? []).map((w: any) => ({ id: w.id, name: w.name })),
+        jobCategories: (cats.data?.items ?? []).map((c: any) => ({ id: c.id ?? c.categoryId, name: c.name })),
+        leadSources,
+        priorities: ['Normal', 'High', 'Urgent'],
+      };
+      this.settingsCache.set(cacheKey, { data, at: Date.now() });
+      return { success: true, data };
+    } catch (err: any) {
+      this.logger.error('getJobSettings error:', err.message);
+      return { success: false, error: err.response?.data?.message ?? err.message };
+    }
+  }
+
+  /** Case-insensitive name→entry lookup ("roofing" matches "Roofing"). */
+  private resolveByName<T extends { id: any; name: string }>(
+    list: T[],
+    name?: string,
+  ): T | undefined {
+    if (!name?.trim()) return undefined;
+    const n = name.trim().toLowerCase();
+    return (
+      list.find(e => e.name.toLowerCase() === n) ??
+      list.find(e => e.name.toLowerCase().includes(n))
+    );
+  }
+
   // ── Contact types (required for POST /contacts) ──────────────────────────
 
   private async getDefaultContactTypeIds(client: any, cacheKey: string): Promise<string[]> {
@@ -461,6 +534,12 @@ export class AccuLynxService {
     zip?:       string;
     source?:    string;
     notes?:     string;
+    /** Full-job fields — NAMES, resolved to AccuLynx ids via getJobSettings() */
+    priority?:    string;   // Normal | High | Urgent
+    jobCategory?: string;   // e.g. Residential, Commercial
+    workType?:    string;   // e.g. Insurance, Repair, New
+    tradeTypes?:  string[]; // e.g. ["Roofing", "Siding"]
+    leadSource?:  string;   // company lead source name (matches "source" too)
     /** Auto-assign the new job to this AccuLynx user (creator's mapping) */
     assignToAcculynxUserId?: string;
   }): Promise<CrmResult> {
@@ -539,6 +618,50 @@ export class AccuLynxService {
         };
       }
 
+      // ── 2b. Full-job fields: resolve names → company-specific ids ────
+      // Unresolvable names are noted, never fatal — the lead still lands.
+      const unresolved: string[] = [];
+      if (lead.priority || lead.jobCategory || lead.workType ||
+          lead.tradeTypes?.length || lead.leadSource || lead.source) {
+        const settings = await this.getJobSettings();
+        if (settings.success && settings.data) {
+          const s = settings.data;
+
+          if (lead.priority) {
+            const p = s.priorities.find(x => x.toLowerCase() === lead.priority!.trim().toLowerCase());
+            if (p) jobPayload.priority = p;
+            else unresolved.push(`priority "${lead.priority}"`);
+          }
+          if (lead.jobCategory) {
+            const c = this.resolveByName(s.jobCategories, lead.jobCategory);
+            if (c) jobPayload.jobCategory = { id: c.id };
+            else unresolved.push(`job category "${lead.jobCategory}"`);
+          }
+          if (lead.workType) {
+            const w = this.resolveByName(s.workTypes, lead.workType);
+            if (w) jobPayload.workType = { id: w.id };
+            else unresolved.push(`work type "${lead.workType}"`);
+          }
+          if (lead.tradeTypes?.length) {
+            const resolved = lead.tradeTypes
+              .map(name => {
+                const t = this.resolveByName(s.tradeTypes, name);
+                if (!t) unresolved.push(`trade type "${name}"`);
+                return t;
+              })
+              .filter(Boolean) as Array<{ id: string }>;
+            if (resolved.length) jobPayload.tradeTypes = resolved.map(t => ({ id: t.id }));
+          }
+          // leadSource: explicit field wins; fall back to matching `source`
+          const sourceName = lead.leadSource ?? lead.source;
+          if (sourceName) {
+            const src = this.resolveByName(s.leadSources, sourceName);
+            if (src) jobPayload.leadSource = { id: src.id };
+            else if (lead.leadSource) unresolved.push(`lead source "${lead.leadSource}"`);
+          }
+        }
+      }
+
       const jobRes = await client.post('/jobs', jobPayload);
       const jobId = jobRes.data?.id;
 
@@ -557,12 +680,15 @@ export class AccuLynxService {
         }
       }
 
+      const unresolvedNote = unresolved.length
+        ? ` Note: could not match ${unresolved.join(', ')} to this company's AccuLynx settings — set manually if needed.`
+        : '';
       return {
         success: true,
         data: { contactId, jobId, job: jobRes.data, assigned },
-        message: assigned
-          ? 'Lead created and assigned to you (contact + job in Lead milestone)'
-          : 'Lead created successfully (contact + job in Lead milestone)',
+        message: (assigned
+          ? 'Lead created and assigned to you (contact + job in Lead milestone).'
+          : 'Lead created successfully (contact + job in Lead milestone).') + unresolvedNote,
       };
     } catch (err: any) {
       this.logger.error('createLead error:', err.response?.data ?? err.message);

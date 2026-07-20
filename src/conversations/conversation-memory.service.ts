@@ -42,11 +42,16 @@ export class ConversationMemoryService {
     sessionId: string,
     limit = ConversationMemoryService.HISTORY_LIMIT,
   ): Promise<MessageParam[]> {
-    const rows = await this.repo.find({
-      where: { sessionId },
-      order: { createdAt: 'ASC' },
-      take: limit,
-    });
+    // NEWEST rows, then restore chronological order. (Previously this took
+    // the OLDEST `limit` rows — once a session grew past the limit, recent
+    // turns were never loaded and the assistant lost all short-term memory.)
+    const rows = (
+      await this.repo.find({
+        where: { sessionId },
+        order: { createdAt: 'DESC' },
+        take: limit,
+      })
+    ).reverse();
 
     const raw: MessageParam[] = rows.map(m => {
       let content: string | any[];
@@ -226,7 +231,10 @@ export class ConversationMemoryService {
     // ownership is enforced upstream via the sessionId prefix check; these
     // columns make per-tenant cleanup and isolation provable).
     const ctx = this.tenantContext.get();
-    const rows = messages.map(msg => ({
+    // Explicit per-row timestamps (+1ms each): rows in one turn used to share
+    // an identical createdAt, making chronological ordering ambiguous.
+    const base = Date.now();
+    const rows = messages.map((msg, i) => ({
       sessionId,
       userId: ctx?.userId && ctx.userId !== 'dev-user' ? ctx.userId : undefined,
       orgId:  ctx?.orgId,
@@ -234,6 +242,7 @@ export class ConversationMemoryService {
       content: typeof msg.content === 'string'
         ? msg.content
         : JSON.stringify(msg.content),
+      createdAt: new Date(base + i),
     }));
     await this.repo.save(rows);
   }
