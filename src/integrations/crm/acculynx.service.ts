@@ -75,6 +75,23 @@ export class AccuLynxService {
     };
   }
 
+  // Contact creation requires contactTypeIds (company-specific UUIDs).
+  // Cached for the life of the process — types rarely change.
+  private contactTypeIdCache: string[] | null = null;
+
+  private async getDefaultContactTypeIds(): Promise<string[]> {
+    if (this.contactTypeIdCache) return this.contactTypeIdCache;
+    const res = await this.client.get('/contacts/contact-types');
+    const items: any[] = res.data?.items ?? [];
+    // Prefer the "Customer" type; fall back to any default, then to the first.
+    const preferred =
+      items.find(t => (t.name ?? '').toLowerCase() === 'customer') ??
+      items.find(t => t.isDefault) ??
+      items[0];
+    this.contactTypeIdCache = preferred ? [preferred.id] : [];
+    return this.contactTypeIdCache;
+  }
+
   // ── Map raw AccuLynx job → clean shape ──────────────────────────────────
   private mapJob(j: any): AccuLynxJob {
     return {
@@ -243,9 +260,16 @@ export class AccuLynxService {
       // https://apidocs.acculynx.com/reference/postjob
 
       // ── 1. Create contact ────────────────────────────────────────────
+      // contactTypeIds is REQUIRED by POST /contacts (verified live 2026-07-19:
+      // "ContactTypeIds Must contain at least one item.")
+      const contactTypeIds = await this.getDefaultContactTypeIds();
+      if (contactTypeIds.length === 0) {
+        return { success: false, error: 'No contact types configured in AccuLynx — cannot create contact.' };
+      }
       const contactPayload: any = {
         firstName: lead.firstName,
         lastName:  lead.lastName,
+        contactTypeIds,
       };
 
       const noteParts: string[] = [];
