@@ -308,6 +308,21 @@ export class ToolDefinitionsService {
         },
       },
       {
+        name: 'crm_my_pipeline',
+        description:
+          "The user's job pipeline grouped by milestone (Lead, Prospect, Approved, Completed, " +
+          "Invoiced) — scoped to jobs assigned to them. Use for pipeline reviews and day/week " +
+          "planning ('what's in my pipeline', 'plan my day/week', 'what should I focus on'). " +
+          "Owner/admin may pass scope 'all' for the whole company when they ask for it. Read-only.",
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            scope: { type: 'string', enum: ['mine', 'all'], description: "Default 'mine'" },
+          },
+          required: [],
+        },
+      },
+      {
         name: 'crm_job_checkup',
         description:
           'Check whether an AccuLynx job has everything needed to submit/move forward. ' +

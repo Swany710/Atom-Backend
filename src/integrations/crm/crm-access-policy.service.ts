@@ -86,6 +86,44 @@ export class CrmAccessPolicyService {
   }
 
   /**
+   * The caller's pipeline: jobs grouped by milestone, scoped to their
+   * assigned jobs (mine) — the default for day/week planning. Owner/admin
+   * can request scope 'all' for the whole company.
+   */
+  async getMyPipeline(
+    accuLynx: AccuLynxService,
+    scope: 'mine' | 'all' = 'mine',
+  ): Promise<CrmResult<Record<string, AccuLynxJob[]>>> {
+    const denied = await this.checkCrmAccess();
+    if (denied) return denied as CrmResult<Record<string, AccuLynxJob[]>>;
+
+    const milestones = ['Lead', 'Prospect', 'Approved', 'Completed', 'Invoiced'];
+    const wantAll = scope === 'all' && this.isPrivileged();
+    const grouped: Record<string, AccuLynxJob[]> = {};
+    let total = 0;
+
+    for (const m of milestones) {
+      let result = await accuLynx.getJobs({ status: m, pageSize: 25 });
+      if (!wantAll) result = await this.filterJobList(result, true);
+      if (!result.success) {
+        // Unmapped user etc. — surface the denial once
+        return { success: false, error: result.error };
+      }
+      grouped[m] = result.data ?? [];
+      total += grouped[m].length;
+    }
+
+    return {
+      success: true,
+      data: grouped,
+      total,
+      message: wantAll
+        ? 'Company-wide pipeline by milestone (first 25 jobs per stage).'
+        : 'Your assigned jobs by milestone (first 25 per stage).',
+    };
+  }
+
+  /**
    * Post-filter a job list for members: keep only jobs where the caller is
    * an assigned rep. Owner/admin lists pass through untouched — unless
    * `force` is set (the "My jobs" view), which applies the caller's mapping

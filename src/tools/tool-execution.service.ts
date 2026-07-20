@@ -617,6 +617,16 @@ export class ToolExecutionService {
         );
       }
 
+      case 'crm_my_pipeline': {
+        return providerRead(
+          () => this.crmPolicy.getMyPipeline(
+            this.accuLynx,
+            args.scope === 'all' ? 'all' : 'mine',
+          ),
+          'acculynx.getMyPipeline',
+        );
+      }
+
       case 'crm_job_checkup': {
         const denied = await this.crmPolicy.checkJobAccess(args.jobId as string);
         if (denied) return denied;
