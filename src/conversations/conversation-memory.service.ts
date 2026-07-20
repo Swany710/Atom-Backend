@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import type { MessageParam } from '@anthropic-ai/sdk/resources/messages';
 import { ChatMemory } from './chat-memory.entity';
+import { TenantContextService } from '../organizations/tenant-context.service';
 
 /**
  * ConversationMemoryService
@@ -27,6 +28,7 @@ export class ConversationMemoryService {
   constructor(
     @InjectRepository(ChatMemory)
     private readonly repo: Repository<ChatMemory>,
+    private readonly tenantContext: TenantContextService,
   ) {}
 
   // ── Read ──────────────────────────────────────────────────────────────────
@@ -220,8 +222,14 @@ export class ConversationMemoryService {
     sessionId: string,
     messages: MessageParam[],
   ): Promise<void> {
+    // Tenancy: stamp the owning user + org on every new row (session
+    // ownership is enforced upstream via the sessionId prefix check; these
+    // columns make per-tenant cleanup and isolation provable).
+    const ctx = this.tenantContext.get();
     const rows = messages.map(msg => ({
       sessionId,
+      userId: ctx?.userId && ctx.userId !== 'dev-user' ? ctx.userId : undefined,
+      orgId:  ctx?.orgId,
       role: msg.role,
       content: typeof msg.content === 'string'
         ? msg.content

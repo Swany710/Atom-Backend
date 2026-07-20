@@ -1,5 +1,5 @@
 import { Module, MiddlewareConsumer, NestModule } from '@nestjs/common';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
@@ -23,6 +23,8 @@ import { MemoryModule } from './memory/memory.module';
 import { ScheduledTasksModule } from './scheduled-tasks/scheduled-tasks.module';
 import { CorrelationMiddleware } from './middleware/correlation.middleware';
 import { AdminModule } from './admin/admin.module';
+import { OrganizationsModule } from './organizations/organizations.module';
+import { TenantContextInterceptor } from './organizations/tenant-context.interceptor';
 
 // Force Node.js to prefer IPv4 for ALL DNS lookups globally.
 // Railway containers cannot reach external IPv6 addresses (ENETUNREACH).
@@ -147,6 +149,7 @@ function buildSslConfig(supa: boolean): false | Record<string, unknown> {
 
     HealthModule,
     AuditModule,
+    OrganizationsModule,
     AuthModule,
     AdminModule,
     PendingActionModule,
@@ -163,6 +166,8 @@ function buildSslConfig(supa: boolean): false | Record<string, unknown> {
   providers: [
     { provide: APP_GUARD, useClass: ApiKeyGuard },
     { provide: APP_GUARD, useClass: ThrottlerGuard },
+    // Tenant context: bridges guard fields into AsyncLocalStorage after auth
+    { provide: APP_INTERCEPTOR, useClass: TenantContextInterceptor },
   ],
 })
 export class AppModule implements NestModule {

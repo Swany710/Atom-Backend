@@ -34,6 +34,11 @@ export class PendingAction {
   @Column()
   userId: string;
 
+  /** Tenant scope (nullable until tenancy migration 009 tightens) */
+  @Index()
+  @Column({ type: 'uuid', nullable: true })
+  orgId?: string;
+
   /** Tool name (e.g. 'send_email') */
   @Column()
   toolName: string;

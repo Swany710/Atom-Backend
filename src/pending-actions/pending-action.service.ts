@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThan } from 'typeorm';
 import { PendingAction } from './pending-action.entity';
 import { AuditService } from '../audit/audit.service';
+import { OrgResolverService } from '../organizations/org-resolver.service';
 
 export interface ConfirmationRequired {
   requiresConfirmation: true;
@@ -31,6 +32,7 @@ export class PendingActionService {
     @InjectRepository(PendingAction)
     private readonly repo: Repository<PendingAction>,
     private readonly audit: AuditService,
+    private readonly orgResolver: OrgResolverService,
   ) {}
 
   /**
@@ -52,6 +54,7 @@ export class PendingActionService {
 
     const action = this.repo.create({
       userId:        params.userId,
+      orgId:         await this.orgResolver.orgIdForUser(params.userId),
       toolName:      params.toolName,
       args:          params.args,
       summary:       params.summary,

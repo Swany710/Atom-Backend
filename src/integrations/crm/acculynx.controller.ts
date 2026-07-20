@@ -1,13 +1,19 @@
-import { Req, Controller, Get, Post, Body, Query, Param } from '@nestjs/common';
+import { Req, Controller, Get, Post, Put, Body, Query, Param, UseGuards } from '@nestjs/common';
 
-import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { AccuLynxService } from './acculynx.service';
+import { CrmAccessPolicyService } from './crm-access-policy.service';
+import { Roles, RolesGuard } from '../../guards/roles.guard';
 
 @ApiBearerAuth('bearer')
 @ApiTags('CRM')
 @Controller('api/v1/integrations/crm')
+@UseGuards(RolesGuard)
 export class AccuLynxController {
-  constructor(private readonly crm: AccuLynxService) {}
+  constructor(
+    private readonly crm: AccuLynxService,
+    private readonly policy: CrmAccessPolicyService,
+  ) {}
 
   /** GET /api/v1/integrations/crm/status */
   @Get('status')
@@ -15,44 +21,75 @@ export class AccuLynxController {
     return this.crm.getStatus();
   }
 
-  /** GET /api/v1/integrations/crm/jobs */
+  /**
+   * PUT /api/v1/integrations/crm/credentials — store the org's AccuLynx API
+   * key (validated against the live API, stored encrypted). Owner/admin only.
+   */
+  @Put('credentials')
+  @Roles('owner', 'admin')
+  @ApiOperation({ summary: "Set the organization's AccuLynx API key" })
+  setCredentials(@Body() body: { apiKey: string }) {
+    return this.crm.setOrgApiKey(body?.apiKey);
+  }
+
+  /**
+   * GET /api/v1/integrations/crm/users — AccuLynx company roster, for the
+   * member-mapping dropdown (CRM-ACCESS-POLICY.md). Owner/admin only.
+   */
+  @Get('users')
+  @Roles('owner', 'admin')
+  @ApiOperation({ summary: 'AccuLynx company user roster (for mapping members)' })
+  listUsers() {
+    return this.crm.listCompanyUsers();
+  }
+
+  /** GET /api/v1/integrations/crm/jobs — members see only their assigned jobs */
   @Get('jobs')
-  getJobs(
+  async getJobs(
     @Query('page')     page     = '1',
     @Query('pageSize') pageSize = '25',
     @Query('status')   status?: string,
     @Query('search')   search?: string,
   ) {
-    return this.crm.getJobs({
+    const denied = await this.policy.checkCrmAccess();
+    if (denied) return denied;
+    const result = await this.crm.getJobs({
       page:     parseInt(page, 10)     || 1,
       pageSize: parseInt(pageSize, 10) || 25,
       status,
       search,
     });
+    return this.policy.filterJobList(result);
   }
 
   /** GET /api/v1/integrations/crm/jobs/:id */
   @Get('jobs/:id')
-  getJob(@Param('id') id: string) {
+  async getJob(@Param('id') id: string) {
+    const denied = await this.policy.checkJobAccess(id);
+    if (denied) return denied;
     return this.crm.getJob(id);
   }
 
   /** POST /api/v1/integrations/crm/jobs/:id/notes */
   @Post('jobs/:id/notes')
-  addNote(
+  async addNote(
     @Param('id') id: string,
     @Body() body: { note: string; authorName?: string },
   ) {
+    const denied = await this.policy.checkJobAccess(id);
+    if (denied) return denied;
     return this.crm.addNote(id, body.note, body.authorName);
   }
 
   /** GET /api/v1/integrations/crm/contacts */
   @Get('contacts')
-  getContacts(
+  async getContacts(
     @Query('page')     page     = '1',
     @Query('pageSize') pageSize = '25',
     @Query('search')   search?: string,
   ) {
+    const denied = await this.policy.checkCrmAccess();
+    if (denied) return denied;
     return this.crm.getContacts({
       page:     parseInt(page, 10)     || 1,
       pageSize: parseInt(pageSize, 10) || 25,
@@ -60,9 +97,9 @@ export class AccuLynxController {
     });
   }
 
-  /** POST /api/v1/integrations/crm/leads */
+  /** POST /api/v1/integrations/crm/leads — auto-assigns to the creator's mapped AccuLynx user */
   @Post('leads')
-  createLead(@Body() body: {
+  async createLead(@Body() body: {
     firstName:  string;
     lastName:   string;
     email?:     string;
@@ -74,6 +111,9 @@ export class AccuLynxController {
     source?:    string;
     notes?:     string;
   }) {
-    return this.crm.createLead(body);
+    const denied = await this.policy.checkCrmAccess();
+    if (denied) return denied;
+    const assignToAcculynxUserId = await this.policy.callerAcculynxUserId();
+    return this.crm.createLead({ ...body, assignToAcculynxUserId });
   }
 }

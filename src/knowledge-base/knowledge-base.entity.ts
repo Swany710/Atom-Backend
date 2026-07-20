@@ -12,6 +12,16 @@ export class KnowledgeBaseEntry {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
+  /**
+   * Tenant scope. NULL = shared library entry (e.g. the preloaded manufacturer
+   * spec library) visible to ALL orgs, writable only via admin tooling.
+   * Non-null = private to that org. This column stays nullable by design —
+   * queries must use: (orgId = :org OR orgId IS NULL).
+   */
+  @Index()
+  @Column({ type: 'uuid', nullable: true })
+  orgId?: string;
+
   @Index()
   @Column({ length: 500 })
   title: string;

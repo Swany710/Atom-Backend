@@ -35,6 +35,11 @@ export class ScheduledTask {
   @Column()
   userId: string;
 
+  /** Tenant scope (nullable until tenancy migration 009 tightens) */
+  @Index()
+  @Column({ type: 'uuid', nullable: true })
+  orgId?: string;
+
   /**
    * The tool/action to run — mirrors ToolDefinitionsService tool names.
    * Supported: 'send_email'

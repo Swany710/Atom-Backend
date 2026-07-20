@@ -17,6 +17,8 @@ interface RegisterDto {
   password: string;
   displayName?: string;
   inviteCode?: string;
+  /** Company name — creates the user's organization (new-org path only) */
+  companyName?: string;
 }
 
 interface LoginDto {
@@ -67,7 +69,17 @@ export class AuthController {
       throw new BadRequestException('password must be at least 8 characters');
     }
 
-    const tokens = await this.authService.register(body.email, body.password, body.displayName);
+    // Org-bound invite → join that org as member; otherwise a new org is
+    // created with the registrant as owner (TENANCY-DESIGN §3).
+    const joinOrgId = invite !== 'env' ? invite.orgId ?? undefined : undefined;
+
+    const tokens = await this.authService.register({
+      email:       body.email,
+      password:    body.password,
+      displayName: body.displayName,
+      companyName: body.companyName,
+      joinOrgId,
+    });
 
     // Consume the single-use code only AFTER a successful registration, so a
     // failed attempt (e.g. duplicate email) doesn't burn the invite.

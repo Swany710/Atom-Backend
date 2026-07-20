@@ -7,11 +7,19 @@ import {
   Index,
 } from 'typeorm';
 
+export type UserRole = 'owner' | 'admin' | 'member';
+
 /**
- * Beta-user account.
+ * User account.
  *
- * Lightweight — no roles, no orgs, no RBAC yet.
- * Each user owns their own email connections, conversations, and calendar tokens.
+ * Each user belongs to exactly one organization (the tenant boundary — see
+ * TENANCY-DESIGN.md). orgId is nullable only during the tenancy rollout;
+ * migration 008 backfills it and 009 makes it NOT NULL.
+ *
+ * Roles:
+ *   owner  — billing, delete org, manage integrations, invite/remove users
+ *   admin  — manage integrations, invite users, manage org KB
+ *   member — use the assistant; owns only their own connections/conversations
  *
  * Authentication flow:
  *   POST /auth/register  → hashed password stored, JWT returned
@@ -22,6 +30,23 @@ import {
 export class User {
   @PrimaryGeneratedColumn('uuid')
   id: string;
+
+  /** Tenant this user belongs to (nullable until migration 009 tightens) */
+  @Index()
+  @Column({ type: 'uuid', nullable: true })
+  orgId?: string;
+
+  /** Role within the org */
+  @Column({ length: 20, default: 'member' })
+  role: UserRole;
+
+  /**
+   * AccuLynx user this Atom account maps to (see CRM-ACCESS-POLICY.md).
+   * Set ONLY by org owner/admin — never self-service (anti-spoofing).
+   * NULL = no CRM job scoping possible; members get no CRM access.
+   */
+  @Column({ type: 'uuid', nullable: true })
+  acculynxUserId?: string;
 
   @Index({ unique: true })
   @Column({ unique: true, length: 255 })

@@ -7,6 +7,7 @@ import { Repository } from 'typeorm';
 import axios from 'axios';
 import { EmailConnection } from './email-connection.entity';
 import { EmailProviderName, emailProviderNames } from './email.types';
+import { OrgResolverService } from '../../organizations/org-resolver.service';
 
 /**
  * Shape of the profile returned from the Gmail API. The Gmail `users.me.profile`
@@ -58,6 +59,7 @@ export class EmailOAuthService {
     private readonly config: ConfigService,
     @InjectRepository(EmailConnection)
     private readonly connectionRepo: Repository<EmailConnection>,
+    private readonly orgResolver: OrgResolverService,
   ) {}
 
   getAuthUrl(provider: EmailProviderName, userId: string): string {
@@ -229,6 +231,7 @@ export class EmailOAuthService {
     const entity = existing ?? this.connectionRepo.create();
     Object.assign(entity, {
       userId,
+      orgId: await this.orgResolver.orgIdForUser(userId),
       provider: 'gmail' as EmailProviderName,
       emailAddress,
       accessToken: encryptToken(access_token),
@@ -288,6 +291,7 @@ export class EmailOAuthService {
     const entity = existing ?? this.connectionRepo.create();
     Object.assign(entity, {
       userId,
+      orgId: await this.orgResolver.orgIdForUser(userId),
       provider: 'outlook' as EmailProviderName,
       emailAddress,
       accessToken: encryptToken(access_token),

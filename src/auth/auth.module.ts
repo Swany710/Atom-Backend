@@ -7,11 +7,12 @@ import { AuthController } from './auth.controller';
 import { InviteCode } from './invite-code.entity';
 import { InviteCodesService } from './invite-codes.service';
 import { UsersModule } from '../users/users.module';
+import { Organization } from '../organizations/organization.entity';
 
 @Module({
   imports: [
     UsersModule,
-    TypeOrmModule.forFeature([InviteCode]),
+    TypeOrmModule.forFeature([InviteCode, Organization]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: (config: ConfigService) => ({

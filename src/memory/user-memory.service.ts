@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThan, MoreThanOrEqual } from 'typeorm';
 import { UserMemory, MemoryLayer } from './user-memory.entity';
+import { OrgResolverService } from '../organizations/org-resolver.service';
 
 export interface MemoryContext {
   profile:  UserMemory[];
@@ -18,6 +19,7 @@ export class UserMemoryService {
   constructor(
     @InjectRepository(UserMemory)
     private readonly repo: Repository<UserMemory>,
+    private readonly orgResolver: OrgResolverService,
   ) {}
 
   // ── Read ──────────────────────────────────────────────────────────────────
@@ -160,7 +162,11 @@ export class UserMemoryService {
       await this.repo.update(existing.id, { value, importance, expiresAt, updatedAt: new Date() });
     } else {
       await this.repo.save(
-        this.repo.create({ userId, layer, key, value, importance, expiresAt }),
+        this.repo.create({
+          userId,
+          orgId: await this.orgResolver.orgIdForUser(userId),
+          layer, key, value, importance, expiresAt,
+        }),
       );
     }
   }

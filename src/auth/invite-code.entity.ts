@@ -23,6 +23,14 @@ export class InviteCode {
   @Column({ length: 200, nullable: true })
   label: string;
 
+  /**
+   * Org this invite joins the new user into (as 'member').
+   * NULL = legacy/admin-dashboard code → registration creates a NEW org
+   * with the registrant as owner.
+   */
+  @Column({ type: 'uuid', nullable: true })
+  orgId?: string;
+
   @Column({ length: 20, default: 'active' })
   status: 'active' | 'used' | 'revoked';
 

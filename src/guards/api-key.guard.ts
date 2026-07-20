@@ -82,14 +82,29 @@ export class ApiKeyGuard implements CanActivate {
         const jwtSecret = this.config.get<string>('JWT_SECRET');
         if (jwtSecret) {
           try {
-            const payload = this.jwtService.verify<{ sub: string; email: string }>(
-              token,
-              { secret: jwtSecret },
-            );
+            const payload = this.jwtService.verify<{
+              sub: string;
+              email: string;
+              org?: string;
+              role?: string;
+            }>(token, { secret: jwtSecret });
+
+            // Tenancy: tokens minted before the org layer carry no `org`
+            // claim. Reject them so the user logs in again and gets a
+            // properly-scoped token (TENANCY-DESIGN §3).
+            if (!payload.org) {
+              throw new UnauthorizedException(
+                'Session expired — please sign in again.',
+              );
+            }
+
             req.atomUserId = payload.sub;
+            req.atomOrgId  = payload.org;
+            req.atomRole   = payload.role ?? 'member';
             req.authMode   = 'jwt';
             return true;
-          } catch {
+          } catch (e) {
+            if (e instanceof UnauthorizedException) throw e;
             // Fall through to API-key check — maybe it just happened to contain '.'
           }
         }
@@ -116,6 +131,10 @@ export class ApiKeyGuard implements CanActivate {
         } else {
           req.atomUserId = ownerId;
         }
+        // API-key mode = service/admin credential → owner-level access.
+        // atomOrgId is resolved lazily by TenantContextInterceptor (DB lookup
+        // of the owner user's org) — guards must stay synchronous.
+        req.atomRole = 'owner';
         req.authMode = 'apikey';
         return true;
       }

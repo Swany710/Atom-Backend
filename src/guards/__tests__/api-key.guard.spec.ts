@@ -23,7 +23,7 @@ function makeContext(
 function makeGuard(
   config: Record<string, string | undefined>,
   reflectorReturn: boolean,
-  jwtVerifyResult?: { sub: string; email: string } | null,
+  jwtVerifyResult?: { sub: string; email: string; org?: string; role?: string } | null,
 ): { guard: ApiKeyGuard; req: Record<string, any> } {
   const configService = {
     get: (key: string) => config[key],
@@ -59,7 +59,7 @@ describe('ApiKeyGuard', () => {
     env: Record<string, string | undefined>,
     headers: Record<string, string>,
     isPublic = false,
-    jwtVerifyResult?: { sub: string; email: string } | null,
+    jwtVerifyResult?: { sub: string; email: string; org?: string; role?: string } | null,
   ): Record<string, any> {
     const req: Record<string, any> = { headers };
 
@@ -171,15 +171,28 @@ describe('ApiKeyGuard', () => {
     // A minimal-looking JWT (three dot-separated segments)
     const FAKE_JWT = 'header.payload.signature';
 
-    it('verifies JWT and sets atomUserId to payload.sub', () => {
+    it('verifies JWT and sets atomUserId/atomOrgId/atomRole from the payload', () => {
       const req = runGuard(
         env,
         { authorization: `Bearer ${FAKE_JWT}` },
         false,
-        { sub: 'user-uuid-123', email: 'user@test.com' },
+        { sub: 'user-uuid-123', email: 'user@test.com', org: 'org-uuid-1', role: 'member' },
       );
       expect(req.atomUserId).toBe('user-uuid-123');
+      expect(req.atomOrgId).toBe('org-uuid-1');
+      expect(req.atomRole).toBe('member');
       expect(req.authMode).toBe('jwt');
+    });
+
+    it('rejects pre-tenancy JWTs that carry no org claim (forces re-login)', () => {
+      expect(() =>
+        runGuard(
+          env,
+          { authorization: `Bearer ${FAKE_JWT}` },
+          false,
+          { sub: 'user-uuid-123', email: 'user@test.com' }, // no org
+        ),
+      ).toThrow('Session expired — please sign in again.');
     });
 
     it('falls through to open-mode (no API_KEY) when JWT verification fails', () => {

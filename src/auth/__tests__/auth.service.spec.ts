@@ -1,10 +1,12 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { JwtService } from '@nestjs/jwt';
+import { DataSource } from 'typeorm';
 import { ConflictException, UnauthorizedException } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
 import { AuthService } from '../auth.service';
 import { User } from '../../users/user.entity';
+import { Organization } from '../../organizations/organization.entity';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -15,8 +17,21 @@ function makeUser(overrides: Partial<User> = {}): User {
     passwordHash: '$2a$12$hashedpassword',
     displayName:  'Test User',
     isVerified:   false,
+    orgId:        'org-uuid-456',
+    role:         'owner',
     createdAt:    new Date(),
     updatedAt:    new Date(),
+    ...overrides,
+  });
+}
+
+function makeOrg(overrides: Partial<Organization> = {}): Organization {
+  return Object.assign(new Organization(), {
+    id:       'org-uuid-456',
+    name:     'Test Co',
+    slug:     'test-co-abc123',
+    plan:     'beta',
+    isActive: true,
     ...overrides,
   });
 }
@@ -30,95 +45,142 @@ function makeRepo(overrides: Partial<Record<string, jest.Mock>> = {}) {
   };
 }
 
+/**
+ * Transaction mock: invokes the callback with a manager whose create/save/
+ * findOne route by entity class (User vs Organization).
+ */
+function makeDataSource(managerBehavior: {
+  savedUser: User;
+  savedOrg?: Organization;
+  joinOrg?: Organization | null;
+}) {
+  const manager = {
+    findOne: jest.fn().mockImplementation((entity: any) =>
+      Promise.resolve(entity === Organization ? managerBehavior.joinOrg ?? null : null),
+    ),
+    create: jest.fn().mockImplementation((entity: any, data: any) => data),
+    save: jest.fn().mockImplementation((data: any) =>
+      Promise.resolve(
+        data?.slug !== undefined
+          ? managerBehavior.savedOrg ?? makeOrg()
+          : Object.assign(makeUser(), data, { id: managerBehavior.savedUser.id }),
+      ),
+    ),
+  };
+  return {
+    manager,
+    transaction: jest.fn().mockImplementation(async (fn: any) => fn(manager)),
+  };
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 describe('AuthService', () => {
   let service: AuthService;
   let repo: ReturnType<typeof makeRepo>;
+  let orgRepo: ReturnType<typeof makeRepo>;
   let jwtService: { sign: jest.Mock };
+  let dataSource: ReturnType<typeof makeDataSource>;
 
-  beforeEach(async () => {
-    repo       = makeRepo();
-    jwtService = { sign: jest.fn().mockReturnValue('signed.jwt.token') };
-
+  async function build(ds = makeDataSource({ savedUser: makeUser() })) {
+    dataSource = ds;
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuthService,
-        { provide: getRepositoryToken(User), useValue: repo },
-        { provide: JwtService,              useValue: jwtService },
+        { provide: getRepositoryToken(User),         useValue: repo },
+        { provide: getRepositoryToken(Organization), useValue: orgRepo },
+        { provide: JwtService,                       useValue: jwtService },
+        { provide: DataSource,                       useValue: dataSource },
       ],
     }).compile();
-
     service = module.get<AuthService>(AuthService);
+  }
+
+  beforeEach(async () => {
+    repo       = makeRepo();
+    orgRepo    = makeRepo();
+    jwtService = { sign: jest.fn().mockReturnValue('signed.jwt.token') };
+    await build();
   });
 
   // ── register ──────────────────────────────────────────────────────────────
 
   describe('register', () => {
-    it('creates a new user and returns a token', async () => {
-      const saved = makeUser();
+    it('creates a new user + org and returns a token', async () => {
       repo.findOne.mockResolvedValue(null);
-      repo.create.mockReturnValue(saved);
-      repo.save.mockResolvedValue(saved);
 
-      const result = await service.register('Test@Example.com', 'password123');
+      const result = await service.register({
+        email: 'Test@Example.com',
+        password: 'password123',
+        companyName: 'Test Co',
+      });
 
       expect(repo.findOne).toHaveBeenCalledWith({ where: { email: 'test@example.com' } });
-      expect(repo.save).toHaveBeenCalled();
+      expect(dataSource.transaction).toHaveBeenCalled();
       expect(result.accessToken).toBe('signed.jwt.token');
-      expect(result.userId).toBe(saved.id);
-      expect(result.email).toBe(saved.email);
+      expect(result.orgId).toBeTruthy();
+      expect(result.role).toBe('owner');
     });
 
-    it('lowercases the email before saving', async () => {
-      const saved = makeUser({ email: 'upper@example.com' });
+    it('registers into an existing org as member for org-bound invites', async () => {
       repo.findOne.mockResolvedValue(null);
-      repo.create.mockReturnValue(saved);
-      repo.save.mockResolvedValue(saved);
+      await build(makeDataSource({
+        savedUser: makeUser({ role: 'member' }),
+        joinOrg: makeOrg(),
+      }));
 
-      await service.register('UPPER@EXAMPLE.COM', 'password123');
+      const result = await service.register({
+        email: 'member@example.com',
+        password: 'password123',
+        joinOrgId: 'org-uuid-456',
+      });
 
-      expect(repo.findOne).toHaveBeenCalledWith({ where: { email: 'upper@example.com' } });
+      // no new org saved — user joined the existing one
+      const userSave = dataSource.manager.create.mock.calls.find(
+        c => c[0] === User,
+      );
+      expect(userSave?.[1]?.role).toBe('member');
+      expect(userSave?.[1]?.orgId).toBe('org-uuid-456');
+      expect(result.accessToken).toBe('signed.jwt.token');
+    });
+
+    it('rejects org-bound invites whose org no longer exists', async () => {
+      repo.findOne.mockResolvedValue(null);
+      await build(makeDataSource({ savedUser: makeUser(), joinOrg: null }));
+
+      await expect(
+        service.register({
+          email: 'member@example.com',
+          password: 'password123',
+          joinOrgId: 'gone-org',
+        }),
+      ).rejects.toThrow(UnauthorizedException);
     });
 
     it('hashes the password — never stores plaintext', async () => {
-      const saved = makeUser();
       repo.findOne.mockResolvedValue(null);
-      repo.create.mockImplementation((data) => ({ ...saved, passwordHash: data.passwordHash }));
-      repo.save.mockResolvedValue(saved);
 
-      await service.register('test@example.com', 'mysecretpassword');
+      await service.register({ email: 'test@example.com', password: 'mysecretpassword' });
 
-      const createCall = repo.create.mock.calls[0][0];
-      expect(createCall.passwordHash).not.toBe('mysecretpassword');
-      const isHashed = await bcrypt.compare('mysecretpassword', createCall.passwordHash);
-      expect(isHashed).toBe(true);
+      const userCreate = dataSource.manager.create.mock.calls.find(c => c[0] === User);
+      const passwordHash = userCreate?.[1]?.passwordHash;
+      expect(passwordHash).not.toBe('mysecretpassword');
+      expect(await bcrypt.compare('mysecretpassword', passwordHash)).toBe(true);
     });
 
     it('throws ConflictException when email is already registered', async () => {
       repo.findOne.mockResolvedValue(makeUser());
 
-      await expect(service.register('test@example.com', 'password123'))
-        .rejects.toThrow(ConflictException);
-    });
-
-    it('includes an optional displayName when provided', async () => {
-      const saved = makeUser({ displayName: 'Jane Doe' });
-      repo.findOne.mockResolvedValue(null);
-      repo.create.mockReturnValue(saved);
-      repo.save.mockResolvedValue(saved);
-
-      await service.register('test@example.com', 'password123', '  Jane Doe  ');
-
-      const createCall = repo.create.mock.calls[0][0];
-      expect(createCall.displayName).toBe('Jane Doe');
+      await expect(
+        service.register({ email: 'test@example.com', password: 'password123' }),
+      ).rejects.toThrow(ConflictException);
     });
   });
 
   // ── login ─────────────────────────────────────────────────────────────────
 
   describe('login', () => {
-    it('returns a token for valid credentials', async () => {
+    it('returns a token (with org + role) for valid credentials', async () => {
       const hash = await bcrypt.hash('correctpassword', 10);
       const user = makeUser({ passwordHash: hash });
       repo.findOne.mockResolvedValue(user);
@@ -127,6 +189,20 @@ describe('AuthService', () => {
 
       expect(result.accessToken).toBe('signed.jwt.token');
       expect(result.userId).toBe(user.id);
+      expect(result.orgId).toBe(user.orgId);
+      expect(result.role).toBe(user.role);
+      // JWT payload must carry org + role (tenancy)
+      const payload = jwtService.sign.mock.calls[0][0];
+      expect(payload.org).toBe(user.orgId);
+      expect(payload.role).toBe(user.role);
+    });
+
+    it('rejects users with no org (pre-backfill accounts)', async () => {
+      const hash = await bcrypt.hash('password', 10);
+      repo.findOne.mockResolvedValue(makeUser({ passwordHash: hash, orgId: undefined }));
+
+      await expect(service.login('test@example.com', 'password'))
+        .rejects.toThrow(UnauthorizedException);
     });
 
     it('throws UnauthorizedException for unknown email', async () => {
@@ -138,8 +214,7 @@ describe('AuthService', () => {
 
     it('throws UnauthorizedException for wrong password', async () => {
       const hash = await bcrypt.hash('correctpassword', 10);
-      const user = makeUser({ passwordHash: hash });
-      repo.findOne.mockResolvedValue(user);
+      repo.findOne.mockResolvedValue(makeUser({ passwordHash: hash }));
 
       await expect(service.login('test@example.com', 'wrongpassword'))
         .rejects.toThrow(UnauthorizedException);
@@ -175,14 +250,18 @@ describe('AuthService', () => {
       const user = makeUser();
       repo.findOne.mockResolvedValue(user);
 
-      const result = await service.validateJwt({ sub: user.id, email: user.email });
+      const result = await service.validateJwt({
+        sub: user.id, email: user.email, org: user.orgId!, role: user.role,
+      });
       expect(result).toBe(user);
     });
 
     it('returns null when the user does not exist', async () => {
       repo.findOne.mockResolvedValue(null);
 
-      const result = await service.validateJwt({ sub: 'nonexistent', email: 'x@x.com' });
+      const result = await service.validateJwt({
+        sub: 'nonexistent', email: 'x@x.com', org: 'o', role: 'member',
+      });
       expect(result).toBeNull();
     });
   });

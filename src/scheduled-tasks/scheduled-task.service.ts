@@ -4,6 +4,7 @@ import { Repository, LessThanOrEqual } from 'typeorm';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ScheduledTask } from './scheduled-task.entity';
 import { EMAIL_PROVIDER, IEmailService } from '../integrations/email/email.provider';
+import { OrgResolverService } from '../organizations/org-resolver.service';
 
 export interface CreateScheduledTaskDto {
   userId: string;
@@ -38,6 +39,7 @@ export class ScheduledTaskService {
     private readonly repo: Repository<ScheduledTask>,
     @Inject(EMAIL_PROVIDER)
     private readonly emailService: IEmailService,
+    private readonly orgResolver: OrgResolverService,
   ) {}
 
   // ── CRUD ──────────────────────────────────────────────────────────────────
@@ -45,6 +47,7 @@ export class ScheduledTaskService {
   async create(dto: CreateScheduledTaskDto): Promise<ScheduledTask> {
     const task = this.repo.create({
       userId:      dto.userId,
+      orgId:       await this.orgResolver.orgIdForUser(dto.userId),
       taskType:    dto.taskType,
       description: dto.description,
       scheduledAt: dto.scheduledAt,

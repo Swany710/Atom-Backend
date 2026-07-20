@@ -31,14 +31,22 @@ export class InviteCodesService {
     return `AMRG-${pick(4)}-${pick(4)}`;
   }
 
-  async create(label?: string): Promise<InviteCode> {
+  /**
+   * Create a single-use invite code.
+   * With orgId → org-bound: registrant joins that org as 'member'.
+   * Without    → legacy/admin code: registrant gets a NEW org as 'owner'.
+   */
+  async create(label?: string, orgId?: string): Promise<InviteCode> {
     const invite = this.repo.create({
       code:   this.generateCode(),
       label:  label?.trim() || undefined,
       status: 'active',
+      orgId:  orgId || undefined,
     });
     const saved = await this.repo.save(invite);
-    this.logger.log(`Invite code created: ${saved.id} (${saved.label ?? 'no label'})`);
+    this.logger.log(
+      `Invite code created: ${saved.id} (${saved.label ?? 'no label'}${saved.orgId ? `, org ${saved.orgId}` : ''})`,
+    );
     return saved;
   }
 

@@ -36,6 +36,11 @@ export class UserMemory {
   @Column()
   userId: string;
 
+  /** Tenant scope (nullable until tenancy migration 009 tightens) */
+  @Index()
+  @Column({ type: 'uuid', nullable: true })
+  orgId?: string;
+
   @Column({ type: 'varchar', length: 20 })
   layer: MemoryLayer;
 

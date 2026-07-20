@@ -3,6 +3,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { PendingActionService } from '../pending-action.service';
 import { PendingAction, PendingActionStatus } from '../pending-action.entity';
 import { AuditService } from '../../audit/audit.service';
+import { OrgResolverService } from '../../organizations/org-resolver.service';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -65,6 +66,7 @@ describe('PendingActionService', () => {
         PendingActionService,
         { provide: getRepositoryToken(PendingAction), useValue: repo },
         { provide: AuditService, useValue: audit },
+        { provide: OrgResolverService, useValue: { orgIdForUser: jest.fn().mockResolvedValue('org-uuid-1') } },
       ],
     }).compile();
 

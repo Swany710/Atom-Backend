@@ -1,5 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { IntegrationCredential } from '../../organizations/integration-credential.entity';
+import { TenantContextService } from '../../organizations/tenant-context.service';
+import { decryptToken, encryptToken } from '../../crypto.util';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const axios = require('axios').default ?? require('axios');
 
@@ -36,6 +41,14 @@ export interface AccuLynxContact {
   zip?:         string;
 }
 
+export interface AccuLynxUser {
+  id:        string;
+  firstName: string;
+  lastName:  string;
+  email?:    string;
+  role?:     string;
+}
+
 export interface CrmResult<T = any> {
   success: boolean;
   data?:   T;
@@ -44,52 +57,148 @@ export interface CrmResult<T = any> {
   error?:   string;
 }
 
+interface OrgClientCacheEntry {
+  client: any | null;
+  at: number;
+}
+
+/**
+ * AccuLynxService — per-org CRM access (TENANCY-DESIGN §3 / CRM-ACCESS-POLICY.md).
+ *
+ * Credentials resolve per-request from `integration_credentials`
+ * (provider 'acculynx', encrypted JSON {"apiKey": "..."}), cached in memory
+ * per org with a short TTL. The ACCULYNX_API_KEY env var remains as a
+ * transition fallback (your own org) and is used when an org has no stored
+ * credential — delete the env var once per-org keys are rolled out.
+ */
 @Injectable()
 export class AccuLynxService {
   private readonly logger = new Logger(AccuLynxService.name);
-  private readonly client: any = null;
   private readonly baseUrl = 'https://api.acculynx.com/api/v2';
 
-  constructor(private readonly config: ConfigService) {
-    const apiKey = this.config.get<string>('ACCULYNX_API_KEY');
-    if (apiKey) {
-      this.client = axios.create({
-        baseURL: this.baseUrl,
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-        },
-        timeout: 15_000,
-      });
-      this.logger.log('AccuLynx client initialised');
-    } else {
-      this.logger.warn('ACCULYNX_API_KEY not set — CRM features disabled');
+  /** orgId (or '__env__') → axios client */
+  private readonly clientCache = new Map<string, OrgClientCacheEntry>();
+  /** orgId (or '__env__') → contactTypeIds */
+  private readonly contactTypeCache = new Map<string, string[]>();
+  private static readonly CLIENT_TTL_MS = 5 * 60_000;
+
+  constructor(
+    private readonly config: ConfigService,
+    private readonly tenantContext: TenantContextService,
+    @InjectRepository(IntegrationCredential)
+    private readonly credRepo: Repository<IntegrationCredential>,
+  ) {}
+
+  // ── Client resolution ─────────────────────────────────────────────────────
+
+  private buildClient(apiKey: string): any {
+    return axios.create({
+      baseURL: this.baseUrl,
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      timeout: 15_000,
+    });
+  }
+
+  /** Resolve the axios client for the current org (null = not connected). */
+  private async getClient(): Promise<{ client: any | null; cacheKey: string }> {
+    const orgId = this.tenantContext.get()?.orgId;
+    const cacheKey = orgId ?? '__env__';
+
+    const hit = this.clientCache.get(cacheKey);
+    if (hit && Date.now() - hit.at < AccuLynxService.CLIENT_TTL_MS) {
+      return { client: hit.client, cacheKey };
     }
+
+    let apiKey: string | undefined;
+
+    if (orgId) {
+      try {
+        const cred = await this.credRepo.findOne({
+          where: { orgId, provider: 'acculynx', isActive: true },
+        });
+        if (cred) {
+          const parsed = JSON.parse(decryptToken(cred.credentials));
+          apiKey = parsed?.apiKey;
+        }
+      } catch (err: any) {
+        this.logger.error(`AccuLynx credential decrypt failed for org ${orgId}: ${err.message}`);
+      }
+    }
+
+    // Transition fallback: global env key (your own org / pre-tenancy)
+    if (!apiKey) {
+      apiKey = this.config.get<string>('ACCULYNX_API_KEY');
+    }
+
+    const client = apiKey ? this.buildClient(apiKey) : null;
+    this.clientCache.set(cacheKey, { client, at: Date.now() });
+    if (!client) {
+      this.logger.warn(`AccuLynx not configured for org ${orgId ?? '(none)'} — CRM disabled`);
+    }
+    return { client, cacheKey };
+  }
+
+  /** Drop cached client/contact-types for an org (call after credential change). */
+  invalidateOrg(orgId: string): void {
+    this.clientCache.delete(orgId);
+    this.contactTypeCache.delete(orgId);
+  }
+
+  /**
+   * Store (or replace) the current org's AccuLynx API key.
+   * Validates the key against the live API before saving; stored encrypted.
+   * Caller authorization (owner/admin) is enforced at the controller.
+   */
+  async setOrgApiKey(apiKey: string): Promise<CrmResult> {
+    const orgId = this.tenantContext.get()?.orgId;
+    if (!orgId) {
+      return { success: false, error: 'No organization context — cannot store credentials.' };
+    }
+    if (!apiKey?.trim()) {
+      return { success: false, error: 'apiKey is required.' };
+    }
+
+    // Validate before saving — a bad key should fail loudly here, not later.
+    try {
+      const probe = this.buildClient(apiKey.trim());
+      await probe.get('/jobs', { params: { pageSize: 1, pageStartIndex: 0 } });
+    } catch (err: any) {
+      const status = err.response?.status;
+      return {
+        success: false,
+        error: status === 401
+          ? 'AccuLynx rejected that API key (401). Check the key at my.acculynx.com/apikeys.'
+          : `Could not validate the key against AccuLynx: ${err.message}`,
+      };
+    }
+
+    const encrypted = encryptToken(JSON.stringify({ apiKey: apiKey.trim() }));
+    const existing = await this.credRepo.findOne({
+      where: { orgId, provider: 'acculynx' },
+    });
+    if (existing) {
+      existing.credentials = encrypted;
+      existing.isActive = true;
+      await this.credRepo.save(existing);
+    } else {
+      await this.credRepo.save(
+        this.credRepo.create({ orgId, provider: 'acculynx', credentials: encrypted, isActive: true }),
+      );
+    }
+    this.invalidateOrg(orgId);
+    this.logger.log(`AccuLynx credentials updated for org ${orgId}`);
+    return { success: true, message: 'AccuLynx connected for your organization.' };
   }
 
   private notConfigured(): CrmResult {
     return {
       success: false,
-      error: 'AccuLynx is not connected. Add ACCULYNX_API_KEY to your Railway environment variables.',
+      error: 'AccuLynx is not connected. An org owner/admin must add the AccuLynx API key in Settings → Integrations.',
     };
-  }
-
-  // Contact creation requires contactTypeIds (company-specific UUIDs).
-  // Cached for the life of the process — types rarely change.
-  private contactTypeIdCache: string[] | null = null;
-
-  private async getDefaultContactTypeIds(): Promise<string[]> {
-    if (this.contactTypeIdCache) return this.contactTypeIdCache;
-    const res = await this.client.get('/contacts/contact-types');
-    const items: any[] = res.data?.items ?? [];
-    // Prefer the "Customer" type; fall back to any default, then to the first.
-    const preferred =
-      items.find(t => (t.name ?? '').toLowerCase() === 'customer') ??
-      items.find(t => t.isDefault) ??
-      items[0];
-    this.contactTypeIdCache = preferred ? [preferred.id] : [];
-    return this.contactTypeIdCache;
   }
 
   // ── Map raw AccuLynx job → clean shape ──────────────────────────────────
@@ -137,7 +246,8 @@ export class AccuLynxService {
     status?: string;
     search?: string;
   }): Promise<CrmResult<AccuLynxJob[]>> {
-    if (!this.client) return this.notConfigured();
+    const { client } = await this.getClient();
+    if (!client) return this.notConfigured();
     try {
       // AccuLynx v2 paginates with pageSize + pageStartIndex (record offset),
       // not page numbers, and filters by `milestones`, not `status`.
@@ -151,7 +261,7 @@ export class AccuLynxService {
 
       if (params?.search) {
         // POST /jobs/search — pageSize capped at 25 by the API
-        const res = await this.client.post(
+        const res = await client.post(
           `/jobs/search?pageSize=${Math.min(pageSize, 25)}&includes=contact`,
           { searchTerm: params.search },
         );
@@ -159,7 +269,7 @@ export class AccuLynxService {
         total = res.data?.count ?? res.data?.total ?? jobs.length;
       } else {
         p.includes = 'contact';
-        const res = await this.client.get('/jobs', { params: p });
+        const res = await client.get('/jobs', { params: p });
         jobs  = res.data?.items ?? res.data?.jobs ?? res.data ?? [];
         total = res.data?.count ?? res.data?.total ?? res.data?.totalCount ?? jobs.length;
       }
@@ -172,9 +282,10 @@ export class AccuLynxService {
   }
 
   async getJob(jobId: string): Promise<CrmResult<AccuLynxJob>> {
-    if (!this.client) return this.notConfigured();
+    const { client } = await this.getClient();
+    if (!client) return this.notConfigured();
     try {
-      const res = await this.client.get(`/jobs/${jobId}`);
+      const res = await client.get(`/jobs/${jobId}`);
       return { success: true, data: this.mapJob(res.data) };
     } catch (err: any) {
       this.logger.error('getJob error:', err.message);
@@ -182,13 +293,82 @@ export class AccuLynxService {
     }
   }
 
+  /**
+   * AccuLynx user IDs assigned as reps on a job (CRM-ACCESS-POLICY.md).
+   * IMPORTANT: unassigned jobs return HTTP 404 from this endpoint (verified
+   * live 2026-07-19) — that means "no reps", not an error.
+   */
+  async getJobRepresentativeIds(jobId: string): Promise<CrmResult<string[]>> {
+    const { client } = await this.getClient();
+    if (!client) return this.notConfigured();
+    try {
+      const res = await client.get(`/jobs/${jobId}/representatives`);
+      const items: any[] = res.data?.items ?? [];
+      const ids = items.map(r => r?.user?.id).filter(Boolean);
+      return { success: true, data: ids };
+    } catch (err: any) {
+      if (err.response?.status === 404) {
+        return { success: true, data: [] }; // unassigned job
+      }
+      this.logger.error('getJobRepresentativeIds error:', err.message);
+      return { success: false, error: err.response?.data?.message ?? err.message };
+    }
+  }
+
+  /** Assign (or reassign) the company rep on a job. */
+  async assignCompanyRep(jobId: string, acculynxUserId: string): Promise<CrmResult> {
+    const { client } = await this.getClient();
+    if (!client) return this.notConfigured();
+    try {
+      await client.post(`/jobs/${jobId}/representatives/company`, { id: acculynxUserId });
+      return { success: true, message: 'Company representative assigned.' };
+    } catch (err: any) {
+      this.logger.error('assignCompanyRep error:', err.response?.data ?? err.message);
+      return { success: false, error: err.response?.data?.title ?? err.response?.data?.message ?? err.message };
+    }
+  }
+
+  /** Company user roster — for the admin mapping dropdown. */
+  async listCompanyUsers(): Promise<CrmResult<AccuLynxUser[]>> {
+    const { client } = await this.getClient();
+    if (!client) return this.notConfigured();
+    try {
+      const users: AccuLynxUser[] = [];
+      let start = 0;
+      const pageSize = 25;
+      // paginate defensively (companies are small; hard cap of 500)
+      for (let i = 0; i < 20; i++) {
+        const res = await client.get('/users', {
+          params: { pageSize, pageStartIndex: start },
+        });
+        const items: any[] = res.data?.items ?? [];
+        users.push(
+          ...items.map(u => ({
+            id:        u.id,
+            firstName: u.firstName ?? '',
+            lastName:  u.lastName ?? '',
+            email:     u.emailAddress ?? u.email ?? undefined,
+            role:      u.role?.name ?? undefined,
+          })),
+        );
+        start += pageSize;
+        if (items.length < pageSize || start >= (res.data?.count ?? 0)) break;
+      }
+      return { success: true, data: users, total: users.length };
+    } catch (err: any) {
+      this.logger.error('listCompanyUsers error:', err.message);
+      return { success: false, error: err.response?.data?.message ?? err.message };
+    }
+  }
+
   async addNote(jobId: string, note: string, authorName?: string): Promise<CrmResult> {
-    if (!this.client) return this.notConfigured();
+    const { client } = await this.getClient();
+    if (!client) return this.notConfigured();
     try {
       // AccuLynx v2: POST /jobs/{jobId}/messages { message } — created as a
       // job comment. The API does not accept an author field, so we prefix it.
       const message = authorName ? `[${authorName}] ${note}` : `[Atom AI] ${note}`;
-      const res = await this.client.post(`/jobs/${jobId}/messages`, { message });
+      const res = await client.post(`/jobs/${jobId}/messages`, { message });
       return { success: true, data: res.data, message: 'Note added successfully' };
     } catch (err: any) {
       this.logger.error('addNote error:', err.response?.data ?? err.message);
@@ -203,7 +383,8 @@ export class AccuLynxService {
     pageSize?: number;
     search?: string;
   }): Promise<CrmResult<AccuLynxContact[]>> {
-    if (!this.client) return this.notConfigured();
+    const { client } = await this.getClient();
+    if (!client) return this.notConfigured();
     try {
       const page     = params?.page ?? 1;
       const pageSize = Math.min(params?.pageSize ?? 25, 25); // API caps at 25
@@ -213,7 +394,7 @@ export class AccuLynxService {
       if (params?.search) {
         // AccuLynx v2 contact search is POST /contacts/search and REQUIRES
         // sort + startDate + endDate. GET /contacts has no searchTerm filter.
-        res = await this.client.post(
+        res = await client.post(
           `/contacts/search?pageSize=${pageSize}&pageStartIndex=${pageStartIndex}`,
           {
             searchTerm: params.search,
@@ -223,7 +404,7 @@ export class AccuLynxService {
           },
         );
       } else {
-        res = await this.client.get('/contacts', {
+        res = await client.get('/contacts', {
           params: { pageSize, pageStartIndex, includes: 'emailAddress,phoneNumber' },
         });
       }
@@ -234,6 +415,23 @@ export class AccuLynxService {
       this.logger.error('getContacts error:', err.message);
       return { success: false, error: err.response?.data?.message ?? err.message };
     }
+  }
+
+  // ── Contact types (required for POST /contacts) ──────────────────────────
+
+  private async getDefaultContactTypeIds(client: any, cacheKey: string): Promise<string[]> {
+    const cached = this.contactTypeCache.get(cacheKey);
+    if (cached) return cached;
+    const res = await client.get('/contacts/contact-types');
+    const items: any[] = res.data?.items ?? [];
+    // Prefer the "Customer" type; fall back to any default, then to the first.
+    const preferred =
+      items.find(t => (t.name ?? '').toLowerCase() === 'customer') ??
+      items.find(t => t.isDefault) ??
+      items[0];
+    const ids = preferred ? [preferred.id] : [];
+    this.contactTypeCache.set(cacheKey, ids);
+    return ids;
   }
 
   // ── Create a lead ─────────────────────────────────────────────────────────
@@ -249,20 +447,22 @@ export class AccuLynxService {
     zip?:       string;
     source?:    string;
     notes?:     string;
+    /** Auto-assign the new job to this AccuLynx user (creator's mapping) */
+    assignToAcculynxUserId?: string;
   }): Promise<CrmResult> {
-    if (!this.client) return this.notConfigured();
+    const { client, cacheKey } = await this.getClient();
+    if (!client) return this.notConfigured();
     try {
       // AccuLynx v2 has no /leads endpoint. The documented flow is:
       //   1. POST /contacts  → create the contact
       //   2. POST /jobs { contact: { id } } → creates a job in milestone
       //      "Lead (Unassigned)"
-      // https://apidocs.acculynx.com/reference/postcontacts
-      // https://apidocs.acculynx.com/reference/postjob
+      //   3. (optional) POST /jobs/{id}/representatives/company → assign rep
 
       // ── 1. Create contact ────────────────────────────────────────────
       // contactTypeIds is REQUIRED by POST /contacts (verified live 2026-07-19:
       // "ContactTypeIds Must contain at least one item.")
-      const contactTypeIds = await this.getDefaultContactTypeIds();
+      const contactTypeIds = await this.getDefaultContactTypeIds(client, cacheKey);
       if (contactTypeIds.length === 0) {
         return { success: false, error: 'No contact types configured in AccuLynx — cannot create contact.' };
       }
@@ -303,7 +503,7 @@ export class AccuLynxService {
       }
       contactPayload.note = noteParts.join(' | ');
 
-      const contactRes = await this.client.post('/contacts', contactPayload);
+      const contactRes = await client.post('/contacts', contactPayload);
       const contactId  = contactRes.data?.id;
       if (!contactId) {
         return { success: false, error: 'Contact created but no id returned by AccuLynx.' };
@@ -325,11 +525,30 @@ export class AccuLynxService {
         };
       }
 
-      const jobRes = await this.client.post('/jobs', jobPayload);
+      const jobRes = await client.post('/jobs', jobPayload);
+      const jobId = jobRes.data?.id;
+
+      // ── 3. Auto-assign the creator as company rep (best-effort) ──────
+      let assigned = false;
+      if (jobId && lead.assignToAcculynxUserId) {
+        try {
+          await client.post(`/jobs/${jobId}/representatives/company`, {
+            id: lead.assignToAcculynxUserId,
+          });
+          assigned = true;
+        } catch (assignErr: any) {
+          this.logger.warn(
+            `Lead ${jobId} created but rep auto-assign failed: ${assignErr.response?.data?.title ?? assignErr.message}`,
+          );
+        }
+      }
+
       return {
         success: true,
-        data: { contactId, jobId: jobRes.data?.id, job: jobRes.data },
-        message: 'Lead created successfully (contact + job in Lead milestone)',
+        data: { contactId, jobId, job: jobRes.data, assigned },
+        message: assigned
+          ? 'Lead created and assigned to you (contact + job in Lead milestone)'
+          : 'Lead created successfully (contact + job in Lead milestone)',
       };
     } catch (err: any) {
       this.logger.error('createLead error:', err.response?.data ?? err.message);
@@ -340,10 +559,11 @@ export class AccuLynxService {
   // ── Connection status ──────────────────────────────────────────────────────
 
   async getStatus(): Promise<{ connected: boolean; message?: string }> {
-    if (!this.client) return { connected: false, message: 'ACCULYNX_API_KEY not set' };
+    const { client } = await this.getClient();
+    if (!client) return { connected: false, message: 'AccuLynx API key not configured for this organization' };
     try {
       // Light probe — fetch 1 job to verify the key works
-      await this.client.get('/jobs', { params: { pageSize: 1, pageStartIndex: 0 } });
+      await client.get('/jobs', { params: { pageSize: 1, pageStartIndex: 0 } });
       return { connected: true };
     } catch (err: any) {
       const status = err.response?.status;

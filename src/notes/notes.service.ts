@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Note } from './note.entity';
+import { OrgResolverService } from '../organizations/org-resolver.service';
 
 export interface NoteResult {
   success: boolean;
@@ -26,6 +27,7 @@ export class NotesService {
   constructor(
     @InjectRepository(Note)
     private readonly repo: Repository<Note>,
+    private readonly orgResolver: OrgResolverService,
   ) {}
 
   private sanitise(n: Note): Partial<Note> {
@@ -43,6 +45,7 @@ export class NotesService {
       if (!content?.trim()) return { success: false, error: 'Note content is required.' };
       const note = await this.repo.save(this.repo.create({
         userId,
+        orgId:   await this.orgResolver.orgIdForUser(userId),
         content: content.trim(),
         title:   title?.trim() || undefined,
       }));

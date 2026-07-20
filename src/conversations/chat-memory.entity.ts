@@ -23,6 +23,15 @@ export class ChatMemory {
   @Column()
   sessionId: string;
 
+  /** Owning user (nullable until tenancy backfill — new rows must set it) */
+  @Column({ type: 'uuid', nullable: true })
+  userId?: string;
+
+  /** Tenant scope (nullable until tenancy migration 009 tightens) */
+  @Index()
+  @Column({ type: 'uuid', nullable: true })
+  orgId?: string;
+
   @Column({ type: 'text' })
   role: string; // 'user' | 'assistant'
 

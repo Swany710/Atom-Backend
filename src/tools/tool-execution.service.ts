@@ -7,6 +7,7 @@ import { CalendarService } from '../integrations/calendar/calendar.service';
 import { GoogleCalendarService } from '../integrations/calendar/google-calendar.service';
 import { OutlookCalendarService } from '../integrations/calendar/outlook-calendar.service';
 import { AccuLynxService } from '../integrations/crm/acculynx.service';
+import { CrmAccessPolicyService } from '../integrations/crm/crm-access-policy.service';
 import { KnowledgeBaseService } from '../knowledge-base/knowledge-base.service';
 import { NotesService } from '../notes/notes.service';
 import { ToolDefinitionsService } from './tool-definitions.service';
@@ -51,6 +52,7 @@ export class ToolExecutionService {
     private readonly calendarService: CalendarService,
     private readonly googleCalendar: GoogleCalendarService,
     private readonly accuLynx: AccuLynxService,
+    private readonly crmPolicy: CrmAccessPolicyService,
     private readonly knowledgeBase: KnowledgeBaseService,
     private readonly notes: NotesService,
     private readonly toolDefs: ToolDefinitionsService,
@@ -302,7 +304,10 @@ export class ToolExecutionService {
         );
       }
 
-      case 'crm_add_note':
+      case 'crm_add_note': {
+        // CRM-ACCESS-POLICY: members can only touch their assigned jobs
+        const denied = await this.crmPolicy.checkJobAccess(args.jobId as string);
+        if (denied) return denied;
         return providerWrite(
           () => this.accuLynx.addNote(
             args.jobId as string,
@@ -311,12 +316,18 @@ export class ToolExecutionService {
           ),
           'acculynx.addNote',
         );
+      }
 
-      case 'crm_create_lead':
+      case 'crm_create_lead': {
+        const denied = await this.crmPolicy.checkCrmAccess();
+        if (denied) return denied;
+        // Auto-assign the new lead to the creator's mapped AccuLynx user
+        const assignToAcculynxUserId = await this.crmPolicy.callerAcculynxUserId();
         return providerWrite(
-          () => this.accuLynx.createLead(args as any),
+          () => this.accuLynx.createLead({ ...(args as any), assignToAcculynxUserId }),
           'acculynx.createLead',
         );
+      }
 
       case 'delete_note':
         return providerWrite(
@@ -553,24 +564,35 @@ export class ToolExecutionService {
         );
       }
 
-      case 'get_crm_jobs':
+      case 'get_crm_jobs': {
+        // CRM-ACCESS-POLICY: members see only their assigned jobs
+        const denied = await this.crmPolicy.checkCrmAccess();
+        if (denied) return denied;
         return providerRead(
-          () => this.accuLynx.getJobs({
-            search:   args.search as string,
-            status:   args.status as string,
-            page:     args.page as number,
-            pageSize: args.pageSize as number,
-          }),
+          async () => this.crmPolicy.filterJobList(
+            await this.accuLynx.getJobs({
+              search:   args.search as string,
+              status:   args.status as string,
+              page:     args.page as number,
+              pageSize: args.pageSize as number,
+            }),
+          ),
           'acculynx.getJobs',
         );
+      }
 
-      case 'get_crm_job':
+      case 'get_crm_job': {
+        const denied = await this.crmPolicy.checkJobAccess(args.jobId as string);
+        if (denied) return denied;
         return providerRead(
           () => this.accuLynx.getJob(args.jobId as string),
           'acculynx.getJob',
         );
+      }
 
-      case 'crm_get_contacts':
+      case 'crm_get_contacts': {
+        const denied = await this.crmPolicy.checkCrmAccess();
+        if (denied) return denied;
         return providerRead(
           () => this.accuLynx.getContacts({
             search:   args.search as string,
@@ -579,6 +601,7 @@ export class ToolExecutionService {
           }),
           'acculynx.getContacts',
         );
+      }
 
       case 'get_general_info':
         return {

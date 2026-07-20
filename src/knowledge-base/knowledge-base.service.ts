@@ -4,6 +4,7 @@ import { Repository, DataSource, Like } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import OpenAI from 'openai';
 import { KnowledgeBaseEntry } from './knowledge-base.entity';
+import { TenantContextService } from '../organizations/tenant-context.service';
 
 export interface KbSearchResult {
   id: string;
@@ -43,6 +44,7 @@ export class KnowledgeBaseService {
     private readonly repo: Repository<KnowledgeBaseEntry>,
     private readonly config: ConfigService,
     private readonly dataSource: DataSource,
+    private readonly tenantContext: TenantContextService,
   ) {
     this.openai = new OpenAI({
       apiKey: this.config.get<string>('OPENAI_API_KEY'),
@@ -79,15 +81,30 @@ export class KnowledgeBaseService {
     }
   }
 
+  /**
+   * Tenant predicate (TENANCY-DESIGN §2): NULL orgId = shared spec library,
+   * readable by every org; non-null = private to that org. Without a tenant
+   * context (should not happen on guarded routes) we fail closed to
+   * shared-library-only.
+   */
+  private currentOrgId(): string | undefined {
+    return this.tenantContext.get()?.orgId;
+  }
+
   // ── Cosine similarity search using pgvector (fallback: text search) ──────
   async search(query: string, limit = 5): Promise<KbSearchResult[]> {
     try {
+      const orgId = this.currentOrgId();
       const queryVec = await this.embed(query);
 
       if (queryVec) {
         // Try pgvector cosine similarity
         try {
           const vecStr = `[${queryVec.join(',')}]`;
+          const orgPredicate = orgId
+            ? `AND ("orgId" = $3 OR "orgId" IS NULL)`
+            : `AND "orgId" IS NULL`;
+          const params: any[] = orgId ? [vecStr, limit, orgId] : [vecStr, limit];
           const rows: any[] = await this.dataSource.query(
             `SELECT id, title, content, source, category,
                     "fileName", "createdAt",
@@ -95,9 +112,10 @@ export class KnowledgeBaseService {
              FROM knowledge_base_entries
              WHERE "isActive" = true
                AND embedding IS NOT NULL
+               ${orgPredicate}
              ORDER BY embedding::vector <=> $1::vector
              LIMIT $2`,
-            [vecStr, limit],
+            params,
           );
           if (rows.length > 0) {
             return rows.map(r => ({
@@ -110,13 +128,21 @@ export class KnowledgeBaseService {
         }
       }
 
-      // Fallback: basic keyword search
-      const entries = await this.repo.find({
-        where: { isActive: true },
-        order: { createdAt: 'DESC' },
-        take: limit,
-        select: ['id', 'title', 'content', 'source', 'category', 'fileName', 'createdAt'],
-      });
+      // Fallback: basic keyword search (same tenant predicate)
+      const qb = this.repo.createQueryBuilder('kb')
+        .where('kb.isActive = :active', { active: true })
+        .orderBy('kb.createdAt', 'DESC')
+        .take(200)
+        .select([
+          'kb.id', 'kb.title', 'kb.content', 'kb.source',
+          'kb.category', 'kb.fileName', 'kb.createdAt',
+        ]);
+      if (orgId) {
+        qb.andWhere('(kb.orgId = :orgId OR kb.orgId IS NULL)', { orgId });
+      } else {
+        qb.andWhere('kb.orgId IS NULL');
+      }
+      const entries = await qb.getMany();
       return entries.filter(e =>
         e.title.toLowerCase().includes(query.toLowerCase()) ||
         e.content.toLowerCase().includes(query.toLowerCase()),
@@ -152,6 +178,9 @@ export class KnowledgeBaseService {
         fileName:  fileName?.trim() || undefined,
         embedding: embedding ? JSON.stringify(embedding) : undefined,
         isActive:  true,
+        // Private org entry. Shared-library entries (orgId NULL) are only
+        // created by direct-DB admin tooling, never through this API.
+        orgId:     this.currentOrgId(),
       });
 
       const saved = await this.repo.save(entry);
@@ -205,6 +234,13 @@ export class KnowledgeBaseService {
           'kb.category', 'kb.fileName', 'kb.createdAt',
         ]);
 
+      const orgId = this.currentOrgId();
+      if (orgId) {
+        qb.andWhere('(kb.orgId = :orgId OR kb.orgId IS NULL)', { orgId });
+      } else {
+        qb.andWhere('kb.orgId IS NULL');
+      }
+
       if (params?.search) {
         qb.andWhere(
           '(LOWER(kb.title) LIKE :q OR LOWER(kb.content) LIKE :q)',
@@ -239,16 +275,37 @@ export class KnowledgeBaseService {
 
   // ── Get single entry ─────────────────────────────────────────────────────
   async getEntry(id: string): Promise<KnowledgeBaseEntry | null> {
-    return this.repo.findOne({
-      where: { id, isActive: true },
-      select: ['id', 'title', 'content', 'source', 'category', 'fileName', 'createdAt', 'updatedAt'],
-    });
+    const orgId = this.currentOrgId();
+    const qb = this.repo.createQueryBuilder('kb')
+      .where('kb.id = :id AND kb.isActive = :active', { id, active: true })
+      .select([
+        'kb.id', 'kb.title', 'kb.content', 'kb.source',
+        'kb.category', 'kb.fileName', 'kb.createdAt', 'kb.updatedAt',
+      ]);
+    if (orgId) {
+      qb.andWhere('(kb.orgId = :orgId OR kb.orgId IS NULL)', { orgId });
+    } else {
+      qb.andWhere('kb.orgId IS NULL');
+    }
+    return qb.getOne();
   }
 
   // ── Delete entry ─────────────────────────────────────────────────────────
   async deleteEntry(id: string): Promise<{ success: boolean; error?: string }> {
     try {
-      await this.repo.update(id, { isActive: false });
+      // Only the org's OWN entries can be deactivated — the shared library
+      // (orgId NULL) is read-only through this API by design.
+      const orgId = this.currentOrgId();
+      if (!orgId) {
+        return { success: false, error: 'No organization context — cannot delete.' };
+      }
+      const res = await this.repo.update({ id, orgId } as any, { isActive: false });
+      if (!res.affected) {
+        return {
+          success: false,
+          error: 'Entry not found in your organization (shared-library entries cannot be deleted).',
+        };
+      }
       return { success: true };
     } catch (err: any) {
       return { success: false, error: err.message };
@@ -258,12 +315,18 @@ export class KnowledgeBaseService {
   // ── List categories ──────────────────────────────────────────────────────
   async listCategories(): Promise<string[]> {
     try {
-      const rows = await this.repo
+      const orgId = this.currentOrgId();
+      const qb = this.repo
         .createQueryBuilder('kb')
         .select('DISTINCT kb.category', 'category')
         .where('kb.isActive = :a', { a: true })
-        .andWhere('kb.category IS NOT NULL')
-        .getRawMany();
+        .andWhere('kb.category IS NOT NULL');
+      if (orgId) {
+        qb.andWhere('(kb.orgId = :orgId OR kb.orgId IS NULL)', { orgId });
+      } else {
+        qb.andWhere('kb.orgId IS NULL');
+      }
+      const rows = await qb.getRawMany();
       return rows.map(r => r.category).filter(Boolean);
     } catch {
       return [];
