@@ -620,6 +620,8 @@ export class AccuLynxService {
 
       // ── 2b. Full-job fields: resolve names → company-specific ids ────
       // Unresolvable names are noted, never fatal — the lead still lands.
+      // Priority always defaults to Normal (users are never asked).
+      jobPayload.priority = 'Normal';
       const unresolved: string[] = [];
       if (lead.priority || lead.jobCategory || lead.workType ||
           lead.tradeTypes?.length || lead.leadSource || lead.source) {
@@ -627,11 +629,10 @@ export class AccuLynxService {
         if (settings.success && settings.data) {
           const s = settings.data;
 
-          if (lead.priority) {
-            const p = s.priorities.find(x => x.toLowerCase() === lead.priority!.trim().toLowerCase());
-            if (p) jobPayload.priority = p;
-            else unresolved.push(`priority "${lead.priority}"`);
-          }
+          // Priority defaults to Normal — users are never asked for it
+          const wantedPriority = lead.priority?.trim() || 'Normal';
+          const p = s.priorities.find(x => x.toLowerCase() === wantedPriority.toLowerCase());
+          jobPayload.priority = p ?? 'Normal';
           if (lead.jobCategory) {
             const c = this.resolveByName(s.jobCategories, lead.jobCategory);
             if (c) jobPayload.jobCategory = { id: c.id };
@@ -693,6 +694,251 @@ export class AccuLynxService {
     } catch (err: any) {
       this.logger.error('createLead error:', err.response?.data ?? err.message);
       return { success: false, error: err.response?.data?.title ?? err.response?.data?.message ?? err.message };
+    }
+  }
+
+  // ── Job windows: insurance / adjuster / homeowner ────────────────────────
+
+  /** GET /jobs/{id}/insurance — claim + insurance company info */
+  async getJobInsurance(jobId: string): Promise<CrmResult> {
+    const { client } = await this.getClient();
+    if (!client) return this.notConfigured();
+    try {
+      const res = await client.get(`/jobs/${jobId}/insurance`);
+      return { success: true, data: res.data };
+    } catch (err: any) {
+      if (err.response?.status === 404) return { success: true, data: null };
+      return { success: false, error: err.response?.data?.message ?? err.message };
+    }
+  }
+
+  /**
+   * PUT /jobs/{id}/insurance — set claim/insurance info.
+   * insuranceCompanyName goes through as free text (assigned to the "Other"
+   * company when it isn't in the account's managed list).
+   */
+  async updateJobInsurance(jobId: string, info: {
+    insuranceCompanyName?: string;
+    claimNumber?:    string;
+    dateOfLoss?:     string;  // ISO 8601 UTC
+    claimFiled?:     boolean;
+    claimFiledDate?: string;
+    damageLocation?: string;
+    hasPaperwork?:   boolean;
+  }): Promise<CrmResult> {
+    const { client } = await this.getClient();
+    if (!client) return this.notConfigured();
+    try {
+      // PUT replaces — merge over what's already there so partial updates
+      // don't wipe existing fields.
+      const existing = (await this.getJobInsurance(jobId)).data ?? {};
+      const payload: any = {
+        damagelocation: info.damageLocation ?? existing.damagelocation,
+        dateOfLoss:     info.dateOfLoss     ?? existing.dateOfLoss,
+        claimFiled:     info.claimFiled     ?? existing.claimFiled ?? Boolean(info.claimFiledDate ?? existing.claimFiledDate),
+        claimFiledDate: info.claimFiledDate ?? existing.claimFiledDate,
+        claimNumber:    info.claimNumber    ?? existing.claimNumber,
+        hasPaperwork:   info.hasPaperwork   ?? existing.hasPaperwork,
+      };
+      if (info.insuranceCompanyName) {
+        payload.insuranceCompany = { insuranceCompanyId: null, insuranceCompanyName: info.insuranceCompanyName };
+      } else if (existing.insuranceCompany?.id) {
+        payload.insuranceCompany = { insuranceCompanyId: existing.insuranceCompany.id, insuranceCompanyName: null };
+      } else if (existing.customInsuranceCompanyName) {
+        payload.insuranceCompany = { insuranceCompanyId: null, insuranceCompanyName: existing.customInsuranceCompanyName };
+      }
+      await client.put(`/jobs/${jobId}/insurance`, payload);
+      return { success: true, message: 'Insurance info updated.' };
+    } catch (err: any) {
+      this.logger.error('updateJobInsurance error:', err.response?.data ?? err.message);
+      return { success: false, error: err.response?.data?.title ?? err.response?.data?.message ?? err.message };
+    }
+  }
+
+  /** GET /jobs/{id}/adjuster */
+  async getJobAdjuster(jobId: string): Promise<CrmResult> {
+    const { client } = await this.getClient();
+    if (!client) return this.notConfigured();
+    try {
+      const res = await client.get(`/jobs/${jobId}/adjuster`);
+      return { success: true, data: res.data };
+    } catch (err: any) {
+      if (err.response?.status === 404) return { success: true, data: null };
+      return { success: false, error: err.response?.data?.message ?? err.message };
+    }
+  }
+
+  /** PUT /jobs/{id}/adjuster — set/update adjuster contact + claim-status facts */
+  async updateJobAdjuster(jobId: string, info: {
+    adjusterName?: string;
+    phone?:        string;  // 10 digits
+    email?:        string;
+    fax?:          string;
+    claimApproved?:       boolean;
+    claimApprovedDate?:   string;
+    metWithAdjuster?:     boolean;
+    metWithAdjusterDate?: string;
+  }): Promise<CrmResult> {
+    const { client } = await this.getClient();
+    if (!client) return this.notConfigured();
+    try {
+      const existing = (await this.getJobAdjuster(jobId)).data ?? {};
+      const payload: any = {
+        adjusterName: info.adjusterName ?? existing.adjusterName,
+        email:        info.email        ?? existing.email,
+        fax:          info.fax          ?? existing.fax,
+        claimApproved:       info.claimApproved       ?? existing.claimApproved,
+        claimApprovedDate:   info.claimApprovedDate   ?? existing.claimApprovedDate,
+        metWithAdjuster:     info.metWithAdjuster     ?? existing.metWithAdjuster,
+        metWithAdjusterDate: info.metWithAdjusterDate ?? existing.metWithAdjusterDate,
+      };
+      if (info.phone) {
+        const digits = info.phone.replace(/\D/g, '').replace(/^1(?=\d{10}$)/, '');
+        if (/^\d{10}$/.test(digits)) payload.phone = { number: digits, type: 'Work' };
+      } else if (existing.phone) {
+        payload.phone = existing.phone;
+      }
+      await client.put(`/jobs/${jobId}/adjuster`, payload);
+      return { success: true, message: 'Adjuster info updated.' };
+    } catch (err: any) {
+      this.logger.error('updateJobAdjuster error:', err.response?.data ?? err.message);
+      return { success: false, error: err.response?.data?.title ?? err.response?.data?.message ?? err.message };
+    }
+  }
+
+  /** Primary contact id for a job (homeowner). */
+  private async getJobPrimaryContactId(client: any, jobId: string): Promise<string | null> {
+    const res = await client.get(`/jobs/${jobId}/contacts`);
+    const items: any[] = res.data?.items ?? [];
+    const primary = items.find(c => c.isPrimary) ?? items[0];
+    return primary?.contact?.id ?? null;
+  }
+
+  /**
+   * Update the job's homeowner (primary contact): name via PUT /contacts/{id};
+   * new email/phone via the documented add-endpoints.
+   */
+  async updateJobHomeowner(jobId: string, info: {
+    firstName?: string;
+    lastName?:  string;
+    email?:     string;
+    phone?:     string;
+  }): Promise<CrmResult> {
+    const { client } = await this.getClient();
+    if (!client) return this.notConfigured();
+    try {
+      const contactId = await this.getJobPrimaryContactId(client, jobId);
+      if (!contactId) return { success: false, error: 'No contact found on this job.' };
+
+      const done: string[] = [];
+      if (info.firstName || info.lastName) {
+        const current = (await client.get(`/contacts/${contactId}`)).data ?? {};
+        await client.put(`/contacts/${contactId}`, {
+          firstName: info.firstName ?? current.firstName,
+          lastName:  info.lastName  ?? current.lastName,
+        });
+        done.push('name');
+      }
+      if (info.email) {
+        await client.post(`/contacts/${contactId}/email-addresses`, {
+          address: info.email, primary: true, type: 'Personal',
+        });
+        done.push('email');
+      }
+      if (info.phone) {
+        const digits = info.phone.replace(/\D/g, '').replace(/^1(?=\d{10}$)/, '');
+        if (!/^\d{10}$/.test(digits)) {
+          return { success: false, error: `Phone must be 10 digits — got "${info.phone}".` };
+        }
+        await client.post(`/contacts/${contactId}/phone-numbers`, {
+          number: digits, primary: true, type: 'Mobile',
+        });
+        done.push('phone');
+      }
+      return {
+        success: true,
+        message: done.length ? `Homeowner ${done.join(', ')} updated.` : 'Nothing to update.',
+      };
+    } catch (err: any) {
+      this.logger.error('updateJobHomeowner error:', err.response?.data ?? err.message);
+      return { success: false, error: err.response?.data?.title ?? err.response?.data?.message ?? err.message };
+    }
+  }
+
+  /**
+   * Job submission checkup: pulls the job's windows and reports what's
+   * missing before the job can move forward. Read-only.
+   */
+  async getJobCheckup(jobId: string): Promise<CrmResult> {
+    const { client } = await this.getClient();
+    if (!client) return this.notConfigured();
+    try {
+      const [jobRes, insurance, adjuster, reps] = await Promise.all([
+        client.get(`/jobs/${jobId}`),
+        this.getJobInsurance(jobId),
+        this.getJobAdjuster(jobId),
+        this.getJobRepresentativeIds(jobId),
+      ]);
+      const job = jobRes.data ?? {};
+
+      // Primary contact details (email/phone live on the contact record)
+      let contact: any = null;
+      try {
+        const contactId = await this.getJobPrimaryContactId(client, jobId);
+        if (contactId) {
+          contact = (await client.get(`/contacts/${contactId}`, {
+            params: { includes: 'emailAddress,phoneNumber' },
+          })).data;
+        }
+      } catch { /* checkup stays best-effort */ }
+
+      const ins = insurance.data ?? {};
+      const adj = adjuster.data ?? {};
+      const missing: string[] = [];
+
+      if (!contact) missing.push('homeowner contact');
+      else {
+        const hasPhone = (contact.phoneNumbers ?? []).length > 0 || contact.phone;
+        const hasEmail = (contact.emailAddresses ?? []).length > 0 || contact.email;
+        if (!hasPhone) missing.push('homeowner phone number');
+        if (!hasEmail) missing.push('homeowner email');
+      }
+      if (!job.locationAddress?.street1) missing.push('job address');
+      if (!(job.tradeTypes ?? []).length) missing.push('trade type(s)');
+      if (!job.workType) missing.push('work type');
+      if (!(reps.data ?? []).length) missing.push('assigned company rep');
+
+      const isInsuranceJob = (job.workType?.name ?? job.workType ?? '')
+        .toString().toLowerCase().includes('insur');
+      if (isInsuranceJob) {
+        if (!ins.insuranceCompany && !ins.customInsuranceCompanyName) missing.push('insurance company');
+        if (!ins.claimNumber) missing.push('claim number');
+        if (!ins.dateOfLoss) missing.push('date of loss');
+        if (!adj.adjusterName) missing.push('adjuster name');
+        if (!ins.hasPaperwork) missing.push('paperwork (hasPaperwork unchecked)');
+      }
+
+      return {
+        success: true,
+        data: {
+          jobName:   job.jobName ?? job.name,
+          milestone: job.currentMilestone?.name ?? job.currentMilestone,
+          workType:  job.workType?.name ?? job.workType ?? null,
+          tradeTypes: (job.tradeTypes ?? []).map((t: any) => t.name ?? t),
+          insurance: ins,
+          adjuster:  adj,
+          homeowner: contact ? {
+            name:  `${contact.firstName ?? ''} ${contact.lastName ?? ''}`.trim(),
+            emails: (contact.emailAddresses ?? []).map((e: any) => e.address ?? e),
+            phones: (contact.phoneNumbers ?? []).map((p: any) => p.number ?? p),
+          } : null,
+          readyToSubmit: missing.length === 0,
+          missing,
+        },
+      };
+    } catch (err: any) {
+      this.logger.error('getJobCheckup error:', err.message);
+      return { success: false, error: err.response?.data?.message ?? err.message };
     }
   }
 

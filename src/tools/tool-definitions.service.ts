@@ -296,7 +296,7 @@ export class ToolDefinitionsService {
             city:        { type: 'string' },
             state:       { type: 'string', description: '2-letter state, e.g. MN' },
             zip:         { type: 'string' },
-            priority:    { type: 'string', enum: ['Normal', 'High', 'Urgent'] },
+            priority:    { type: 'string', enum: ['Normal', 'High', 'Urgent'], description: 'Defaults to Normal — NEVER ask the user for priority; only set if they volunteer it' },
             jobCategory: { type: 'string', description: 'e.g. Residential, Commercial' },
             workType:    { type: 'string', description: 'e.g. Insurance, Repair, New' },
             tradeTypes:  { type: 'array', items: { type: 'string' }, description: 'e.g. ["Roofing","Siding"]' },
@@ -307,6 +307,84 @@ export class ToolDefinitionsService {
           required: ['firstName', 'lastName'],
         },
       },
+      {
+        name: 'crm_job_checkup',
+        description:
+          'Check whether an AccuLynx job has everything needed to submit/move forward. ' +
+          'Returns the job\'s homeowner, insurance, and adjuster info plus a list of what is ' +
+          'MISSING (e.g. claim number, date of loss, adjuster, homeowner phone). Use when the ' +
+          'user wants to submit a job, asks "is the job ready", or before helping them fill gaps. ' +
+          'Read-only — no confirmation needed. Find the jobId with get_crm_jobs first if needed.',
+        input_schema: {
+          type: 'object' as const,
+          properties: { jobId: { type: 'string' } },
+          required: ['jobId'],
+        },
+      },
+      {
+        name: 'crm_update_insurance',
+        description:
+          'Update the insurance window on an AccuLynx job: insurance company, claim number, ' +
+          'date of loss, claim filed (+date), damage location, paperwork collected. ' +
+          'RECORD-KEEPING ONLY (see UPPA guardrail — never advise on claim strategy). ' +
+          'REQUIRE confirmation before calling. Only pass fields the user provided.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            jobId:                { type: 'string' },
+            insuranceCompanyName: { type: 'string' },
+            claimNumber:          { type: 'string' },
+            dateOfLoss:           { type: 'string', description: 'ISO 8601 UTC, e.g. 2026-06-14T00:00:00Z' },
+            claimFiled:           { type: 'boolean' },
+            claimFiledDate:       { type: 'string', description: 'ISO 8601 UTC' },
+            damageLocation:       { type: 'string' },
+            hasPaperwork:         { type: 'boolean' },
+            pendingActionId:      { type: 'string' },
+          },
+          required: ['jobId'],
+        },
+      },
+      {
+        name: 'crm_update_adjuster',
+        description:
+          'Update the adjuster window on an AccuLynx job: adjuster name, phone, email, fax, ' +
+          'met-with-adjuster (+date), claim approved (+date). RECORD-KEEPING ONLY (UPPA guardrail). ' +
+          'REQUIRE confirmation before calling. Only pass fields the user provided.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            jobId:               { type: 'string' },
+            adjusterName:        { type: 'string' },
+            phone:               { type: 'string', description: '10-digit US phone' },
+            email:               { type: 'string' },
+            fax:                 { type: 'string' },
+            claimApproved:       { type: 'boolean' },
+            claimApprovedDate:   { type: 'string', description: 'ISO 8601 UTC' },
+            metWithAdjuster:     { type: 'boolean' },
+            metWithAdjusterDate: { type: 'string', description: 'ISO 8601 UTC' },
+            pendingActionId:     { type: 'string' },
+          },
+          required: ['jobId'],
+        },
+      },
+      {
+        name: 'crm_update_homeowner',
+        description:
+          'Update the homeowner (primary contact) on an AccuLynx job: name, email, phone. ' +
+          'REQUIRE confirmation before calling. Only pass fields the user provided.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            jobId:           { type: 'string' },
+            firstName:       { type: 'string' },
+            lastName:        { type: 'string' },
+            email:           { type: 'string' },
+            phone:           { type: 'string', description: '10-digit US phone' },
+            pendingActionId: { type: 'string' },
+          },
+          required: ['jobId'],
+        },
+      },
 
       // ── Scheduled Tasks ─────────────────────────────────────────────
       {
@@ -315,7 +393,9 @@ export class ToolDefinitionsService {
           'Schedule a future action to be executed automatically at a specific date and time. ' +
           'Use when the user says things like "send a reminder email at 3pm Friday", ' +
           '"email the homeowner tomorrow morning", or "remind me to follow up on Monday". ' +
-          'Supported taskTypes: send_email. ' +
+          'Supported taskTypes: send_email (emails someone), reminder (reminds the USER themselves — ' +
+          'delivered to their own email). Use "reminder" whenever the user wants to be reminded of ' +
+          'their own to-dos: reinspection packet, setting up calls, collecting paperwork, follow-ups. ' +
           'scheduledAt must be an ISO 8601 datetime string (e.g. "2025-06-15T15:00:00-05:00"). ' +
           'When the user mentions a day/time without a year, infer the next upcoming occurrence.',
         input_schema: {
@@ -323,7 +403,7 @@ export class ToolDefinitionsService {
           properties: {
             taskType: {
               type: 'string',
-              description: 'The type of action to schedule. Currently supported: send_email',
+              description: 'The type of action to schedule: send_email | reminder',
             },
             description: {
               type: 'string',
@@ -336,12 +416,14 @@ export class ToolDefinitionsService {
             args: {
               type: 'object' as const,
               description:
-                'Arguments for the task. For send_email: { to: string[], subject: string, body: string, cc?: string[] }',
+                'Arguments for the task. For send_email: { to: string[], subject: string, body: string, cc?: string[] }. ' +
+                'For reminder: { message: string } — what to remind the user about.',
               properties: {
-                to:      { type: 'array', items: { type: 'string' }, description: 'Recipient email addresses' },
-                subject: { type: 'string', description: 'Email subject line' },
-                body:    { type: 'string', description: 'Email body (plain text)' },
-                cc:      { type: 'array', items: { type: 'string' }, description: 'CC recipients (optional)' },
+                to:      { type: 'array', items: { type: 'string' }, description: 'send_email: recipient email addresses' },
+                subject: { type: 'string', description: 'send_email: subject line' },
+                body:    { type: 'string', description: 'send_email: body (plain text)' },
+                cc:      { type: 'array', items: { type: 'string' }, description: 'send_email: CC recipients (optional)' },
+                message: { type: 'string', description: 'reminder: what to remind the user about' },
               },
             },
           },
@@ -439,6 +521,9 @@ export class ToolDefinitionsService {
     'delete_calendar_event',
     'crm_add_note',
     'crm_create_lead',
+    'crm_update_insurance',
+    'crm_update_adjuster',
+    'crm_update_homeowner',
     // create_note is deliberately NOT here — personal notes save instantly
     // (user preference); deleting a note still requires confirmation.
     'delete_note',

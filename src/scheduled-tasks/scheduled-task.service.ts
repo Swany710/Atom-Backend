@@ -5,6 +5,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { ScheduledTask } from './scheduled-task.entity';
 import { EMAIL_PROVIDER, IEmailService } from '../integrations/email/email.provider';
 import { OrgResolverService } from '../organizations/org-resolver.service';
+import { User } from '../users/user.entity';
 
 export interface CreateScheduledTaskDto {
   userId: string;
@@ -37,6 +38,8 @@ export class ScheduledTaskService {
   constructor(
     @InjectRepository(ScheduledTask)
     private readonly repo: Repository<ScheduledTask>,
+    @InjectRepository(User)
+    private readonly userRepo: Repository<User>,
     @Inject(EMAIL_PROVIDER)
     private readonly emailService: IEmailService,
     private readonly orgResolver: OrgResolverService,
@@ -164,6 +167,29 @@ export class ScheduledTaskService {
           cc,
           undefined,   // replyToMessageId
           undefined,   // threadId
+          task.userId,
+        );
+      }
+
+      case 'reminder': {
+        // Remind the USER themselves — delivered to their login email via
+        // their own connected account. args: { message }
+        const message = (args.message as string) || task.description;
+        if (!message) throw new Error('reminder task missing args.message');
+
+        const user = await this.userRepo.findOne({ where: { id: task.userId } });
+        if (!user?.email) throw new Error(`reminder: no email on user ${task.userId}`);
+
+        return this.emailService.sendEmail(
+          [user.email],
+          `⏰ Atom reminder: ${message.slice(0, 80)}`,
+          `Hi${user.displayName ? ' ' + user.displayName : ''},\n\n` +
+            `This is your reminder from Atom:\n\n${message}\n\n` +
+            `— Atom`,
+          false,
+          undefined,
+          undefined,
+          undefined,
           task.userId,
         );
       }

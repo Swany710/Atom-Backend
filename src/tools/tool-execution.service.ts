@@ -329,6 +329,33 @@ export class ToolExecutionService {
         );
       }
 
+      case 'crm_update_insurance': {
+        const denied = await this.crmPolicy.checkJobAccess(args.jobId as string);
+        if (denied) return denied;
+        return providerWrite(
+          () => this.accuLynx.updateJobInsurance(args.jobId as string, args as any),
+          'acculynx.updateJobInsurance',
+        );
+      }
+
+      case 'crm_update_adjuster': {
+        const denied = await this.crmPolicy.checkJobAccess(args.jobId as string);
+        if (denied) return denied;
+        return providerWrite(
+          () => this.accuLynx.updateJobAdjuster(args.jobId as string, args as any),
+          'acculynx.updateJobAdjuster',
+        );
+      }
+
+      case 'crm_update_homeowner': {
+        const denied = await this.crmPolicy.checkJobAccess(args.jobId as string);
+        if (denied) return denied;
+        return providerWrite(
+          () => this.accuLynx.updateJobHomeowner(args.jobId as string, args as any),
+          'acculynx.updateJobHomeowner',
+        );
+      }
+
       case 'delete_note':
         return providerWrite(
           () => this.notes.delete(userId, args.noteId as string),
@@ -590,6 +617,15 @@ export class ToolExecutionService {
         );
       }
 
+      case 'crm_job_checkup': {
+        const denied = await this.crmPolicy.checkJobAccess(args.jobId as string);
+        if (denied) return denied;
+        return providerRead(
+          () => this.accuLynx.getJobCheckup(args.jobId as string),
+          'acculynx.getJobCheckup',
+        );
+      }
+
       case 'crm_get_contacts': {
         const denied = await this.crmPolicy.checkCrmAccess();
         if (denied) return denied;
@@ -793,6 +829,14 @@ export class ToolExecutionService {
         return `Add note to CRM job ${args.jobId}`;
       case 'crm_create_lead':
         return `Create CRM lead for ${args.firstName} ${args.lastName}`;
+      case 'crm_update_insurance':
+        return `Update insurance info on CRM job ${args.jobId}` +
+          (args.claimNumber ? ` (claim #${args.claimNumber})` : '');
+      case 'crm_update_adjuster':
+        return `Update adjuster info on CRM job ${args.jobId}` +
+          (args.adjusterName ? ` (${args.adjusterName})` : '');
+      case 'crm_update_homeowner':
+        return `Update homeowner info on CRM job ${args.jobId}`;
       case 'delete_note':
         return `Delete personal note ${args.noteId}`;
       default:
@@ -813,6 +857,9 @@ export class ToolExecutionService {
       delete_calendar_event:  'calendar_event_delete',
       crm_add_note:           'crm_note_add',
       crm_create_lead:        'crm_lead_create',
+      crm_update_insurance:   'crm_lead_create',
+      crm_update_adjuster:    'crm_lead_create',
+      crm_update_homeowner:   'crm_lead_create',
       delete_note:            'note_delete',
     };
     return map[toolName] ?? 'knowledge_base_write';
