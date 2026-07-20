@@ -747,7 +747,24 @@ export class AccuLynxService {
       } else if (existing.customInsuranceCompanyName) {
         payload.insuranceCompany = { insuranceCompanyId: null, insuranceCompanyName: existing.customInsuranceCompanyName };
       }
-      await client.put(`/jobs/${jobId}/insurance`, payload);
+      try {
+        await client.put(`/jobs/${jobId}/insurance`, payload);
+      } catch (putErr: any) {
+        // 412: setting a company NAME requires the account's "Other"
+        // insurance company to be enabled. Save everything else and say so.
+        if (putErr.response?.status === 412 && payload.insuranceCompany?.insuranceCompanyName) {
+          delete payload.insuranceCompany;
+          await client.put(`/jobs/${jobId}/insurance`, payload);
+          return {
+            success: true,
+            message:
+              'Claim info updated, but the insurance company name could not be set — ' +
+              'this AccuLynx account requires the "Other" insurance company to be enabled ' +
+              'in Account Settings (or pick a managed insurance company inside AccuLynx).',
+          };
+        }
+        throw putErr;
+      }
       return { success: true, message: 'Insurance info updated.' };
     } catch (err: any) {
       this.logger.error('updateJobInsurance error:', err.response?.data ?? err.message);
