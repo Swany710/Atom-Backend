@@ -959,6 +959,125 @@ export class AccuLynxService {
     }
   }
 
+  // ── Milestones / workflow buckets (READ ONLY) ───────────────────────────
+  //
+  // AccuLynx exposes NO API to move a job between milestones (Lead → Prospect)
+  // or between the statuses/buckets inside a milestone — `currentMilestone` is
+  // read-only and every milestone/status endpoint is a GET. So Atom reports the
+  // state and what's missing; the actual move happens in the AccuLynx UI.
+
+  /** `${cacheKey}:${milestone}` → configured buckets; reuse the settings TTL. */
+  private readonly milestoneStatusCache = new Map<string, { data: Array<{ id: string; name: string }>; at: number }>();
+
+  /** Pipeline order used to compute the "next" milestone (Closed/Cancelled excluded). */
+  private static readonly MILESTONE_ORDER = ['Lead', 'Prospect', 'Approved', 'Completed', 'Invoiced'];
+
+  /**
+   * Configured statuses (buckets) for a milestone, e.g. the buckets inside
+   * "prospect". Requires the account to have custom workflows enabled;
+   * otherwise AccuLynx returns nothing and we degrade to an empty list.
+   */
+  async getMilestoneStatuses(milestone: string): Promise<Array<{ id: string; name: string }>> {
+    const { client, cacheKey } = await this.getClient();
+    if (!client) return [];
+
+    const m = milestone.trim().toLowerCase();
+    const key = `${cacheKey}:${m}`;
+    const hit = this.milestoneStatusCache.get(key);
+    if (hit && Date.now() - hit.at < AccuLynxService.SETTINGS_TTL_MS) return hit.data;
+
+    try {
+      const res = await client.get(
+        `/company-settings/job-file-settings/workflow-milestones/${m}/statuses`,
+        { params: { pageSize: 100 } },
+      );
+      const items: any[] = res.data?.items ?? (Array.isArray(res.data) ? res.data : res.data ? [res.data] : []);
+      const statuses = items.map(s => ({ id: s.id, name: s.name }));
+      this.milestoneStatusCache.set(key, { data: statuses, at: Date.now() });
+      return statuses;
+    } catch (err: any) {
+      // Custom workflows disabled / not found → treat as "no buckets", not an error.
+      this.logger.warn(`getMilestoneStatuses(${m}) failed: ${err.response?.status ?? err.message}`);
+      return [];
+    }
+  }
+
+  /** The job's current milestone + current bucket/status (includes=status). */
+  async getCurrentMilestone(jobId: string): Promise<CrmResult> {
+    const { client } = await this.getClient();
+    if (!client) return this.notConfigured();
+    try {
+      const res = await client.get(`/jobs/${jobId}/milestones/current`, {
+        params: { includes: 'status' },
+      });
+      const m = res.data ?? {};
+      const statuses = (m.statuses ?? []).map((s: any) => ({ name: s.name, isCurrent: !!s.isCurrent }));
+      const current = statuses.find((s: any) => s.isCurrent);
+      return {
+        success: true,
+        data: { milestone: m.name ?? null, currentStatus: current?.name ?? null, statuses },
+      };
+    } catch (err: any) {
+      if (err.response?.status === 404) {
+        return { success: true, data: { milestone: null, currentStatus: null, statuses: [] } };
+      }
+      this.logger.error('getCurrentMilestone error:', err.message);
+      return { success: false, error: err.response?.data?.message ?? err.message };
+    }
+  }
+
+  /**
+   * Guided-advance summary for one job: current milestone + bucket, the buckets
+   * available in the current and the target (default: next) milestone, and the
+   * submission-readiness list. READ ONLY — see the note above. The orchestrator
+   * uses this to tell the user what's missing, offer to fill it, and set a
+   * reminder to make the actual move in AccuLynx.
+   */
+  async getJobAdvance(jobId: string, targetMilestone?: string): Promise<CrmResult> {
+    const { client } = await this.getClient();
+    if (!client) return this.notConfigured();
+
+    const [current, checkup] = await Promise.all([
+      this.getCurrentMilestone(jobId),
+      this.getJobCheckup(jobId),
+    ]);
+    if (!current.success) return current;
+
+    const order = AccuLynxService.MILESTONE_ORDER;
+    const curName: string | null = current.data?.milestone ?? checkup.data?.milestone ?? null;
+    const curIdx = order.findIndex(x => x.toLowerCase() === (curName ?? '').toLowerCase());
+    const nextName: string | null = targetMilestone
+      ? order.find(x => x.toLowerCase() === targetMilestone.trim().toLowerCase()) ?? targetMilestone
+      : curIdx >= 0 && curIdx + 1 < order.length
+        ? order[curIdx + 1]
+        : null;
+
+    const [currentBuckets, nextBuckets] = await Promise.all([
+      curName ? this.getMilestoneStatuses(curName) : Promise.resolve([]),
+      nextName ? this.getMilestoneStatuses(nextName) : Promise.resolve([]),
+    ]);
+
+    return {
+      success: true,
+      data: {
+        jobName:                 checkup.data?.jobName ?? null,
+        currentMilestone:        curName,
+        currentStatus:           current.data?.currentStatus ?? null,
+        currentMilestoneBuckets: currentBuckets.map(b => b.name),
+        nextMilestone:           nextName,
+        nextMilestoneBuckets:    nextBuckets.map(b => b.name),
+        readiness: {
+          readyToSubmit: checkup.data?.readyToSubmit ?? null,
+          missing:       checkup.data?.missing ?? [],
+        },
+        moveNote:
+          'AccuLynx has no API to move a job between milestones or buckets — the ' +
+          'move must be done in the AccuLynx UI (open the job, use the milestone/status ' +
+          'control). Atom can fill any missing fields and set a reminder to make the move.',
+      },
+    };
+  }
+
   // ── Connection status ──────────────────────────────────────────────────────
 
   async getStatus(): Promise<{ connected: boolean; message?: string }> {

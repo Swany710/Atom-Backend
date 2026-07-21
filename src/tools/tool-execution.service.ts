@@ -637,6 +637,18 @@ export class ToolExecutionService {
         );
       }
 
+      case 'crm_job_advance': {
+        const denied = await this.crmPolicy.checkJobAccess(args.jobId as string);
+        if (denied) return denied;
+        return providerRead(
+          () => this.accuLynx.getJobAdvance(
+            args.jobId as string,
+            args.targetMilestone as string | undefined,
+          ),
+          'acculynx.getJobAdvance',
+        );
+      }
+
       case 'crm_get_contacts': {
         const denied = await this.crmPolicy.checkCrmAccess();
         if (denied) return denied;

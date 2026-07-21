@@ -337,6 +337,31 @@ export class ToolDefinitionsService {
         },
       },
       {
+        name: 'crm_job_advance',
+        description:
+          'Read-only guidance for moving an AccuLynx job forward through the pipeline. ' +
+          "Returns the job's current milestone and bucket/status, the buckets available in " +
+          "the current and next milestone, and what is still MISSING before submission. Use " +
+          'when the user wants to move/advance a job (e.g. "move job X to Prospect", ' +
+          '"what\'s next for this job", "move it through the buckets"). IMPORTANT: AccuLynx ' +
+          'has NO API to actually move a job between milestones or buckets — report the state, ' +
+          'offer to fill missing fields (crm_update_*), and offer to set a reminder; the user ' +
+          'makes the actual move in the AccuLynx UI. Do NOT guide moves into Approved. Find ' +
+          'the jobId with get_crm_jobs first if needed.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            jobId:           { type: 'string' },
+            targetMilestone: {
+              type: 'string',
+              enum: ['Prospect', 'Approved', 'Completed', 'Invoiced'],
+              description: 'Optional milestone the user wants to move toward; defaults to the next one after current.',
+            },
+          },
+          required: ['jobId'],
+        },
+      },
+      {
         name: 'crm_update_insurance',
         description:
           'Update the insurance window on an AccuLynx job: insurance company, claim number, ' +
