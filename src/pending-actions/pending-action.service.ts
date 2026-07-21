@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, LessThan } from 'typeorm';
+import { Repository, LessThan, MoreThan } from 'typeorm';
 import { PendingAction } from './pending-action.entity';
 import { AuditService } from '../audit/audit.service';
 import { OrgResolverService } from '../organizations/org-resolver.service';
@@ -96,6 +96,36 @@ export class PendingActionService {
     pendingActionId: string,
     userId: string,
   ): Promise<PendingActionResult | PendingActionError> {
+    // Atomic claim: a single conditional UPDATE is the ONLY thing that flips
+    // 'pending' → 'confirmed'. The row lock guarantees that under concurrent
+    // confirmations (double-click, client retry) exactly one call sees
+    // affected === 1 and executes — closing the read-then-write (TOCTOU)
+    // window where two claims could both pass a status check and double-run.
+    const now = new Date();
+    const claimed = await this.repo.update(
+      { id: pendingActionId, userId, status: 'pending', expiresAt: MoreThan(now) },
+      { status: 'confirmed' },
+    );
+
+    if (claimed.affected === 1) {
+      const action = await this.repo.findOne({ where: { id: pendingActionId } });
+      // Should always be present, but guard against a concurrent delete.
+      if (!action) {
+        return { ok: false, reason: 'not_found', message: 'Pending action not found' };
+      }
+      this.audit.logWrite({
+        action:       'pending_action_confirmed',
+        userId,
+        targetSystem: 'pending_actions',
+        targetId:     action.id,
+        argsSnapshot: { toolName: action.toolName },
+        resultSummary: 'Confirmed by user',
+      });
+      return { ok: true, action };
+    }
+
+    // affected === 0 — the claim lost the race or the record isn't claimable.
+    // Re-read once to return a precise, user-facing reason.
     const action = await this.repo.findOne({ where: { id: pendingActionId } });
 
     if (!action || action.userId !== userId) {
@@ -106,12 +136,14 @@ export class PendingActionService {
       return { ok: false, reason: 'already_confirmed', message: 'This action has already been executed' };
     }
 
-    if (action.status === 'expired' || action.status === 'cancelled') {
-      return { ok: false, reason: action.status, message: `This action has been ${action.status}` };
+    if (action.status === 'cancelled') {
+      return { ok: false, reason: 'cancelled', message: 'This action has been cancelled' };
     }
 
-    if (new Date() > action.expiresAt) {
-      await this.repo.update(action.id, { status: 'expired' });
+    // status is 'pending' but the MoreThan(now) predicate excluded it, or it
+    // was already marked expired — either way the window has closed.
+    if (action.status === 'pending') {
+      await this.repo.update({ id: action.id, status: 'pending' }, { status: 'expired' });
       this.audit.logWrite({
         action:       'pending_action_expired',
         userId,
@@ -120,23 +152,8 @@ export class PendingActionService {
         argsSnapshot: { toolName: action.toolName },
         resultSummary: 'Expired before confirmation',
       });
-      return { ok: false, reason: 'expired', message: `Confirmation window expired (${PendingAction.EXPIRY_MINUTES} minutes)` };
     }
-
-    // Mark confirmed — prevents double-execution
-    await this.repo.update(action.id, { status: 'confirmed' });
-    action.status = 'confirmed';
-
-    this.audit.logWrite({
-      action:       'pending_action_confirmed',
-      userId,
-      targetSystem: 'pending_actions',
-      targetId:     action.id,
-      argsSnapshot: { toolName: action.toolName },
-      resultSummary: 'Confirmed by user',
-    });
-
-    return { ok: true, action };
+    return { ok: false, reason: 'expired', message: `Confirmation window expired (${PendingAction.EXPIRY_MINUTES} minutes)` };
   }
 
   /** Record the result of a confirmed execution */

@@ -256,6 +256,41 @@ export class ToolExecutionService {
         );
       }
 
+      case 'delete_email': {
+        // Gated write: moves the message to trash. Recoverable, but it still
+        // changes the mailbox, so it runs through the confirmation flow.
+        const provider = await this.userEmailProvider(userId);
+        if (provider === 'outlook') {
+          return providerWrite(
+            () => this.emailRouter.deleteEmail(
+              args.messageId as string,
+              false,
+              userId,
+              'outlook',
+            ),
+            'outlook.deleteEmail',
+          );
+        }
+        return providerWrite(
+          () => this.gmailService.deleteEmail(args.messageId as string, userId),
+          'gmail.deleteEmail',
+        );
+      }
+
+      case 'archive_email': {
+        // Gated write: removes the message from the inbox.
+        if (await this.userEmailProvider(userId) === 'outlook') {
+          return providerWrite(
+            () => this.outlookTransport.archive(userId, args.messageId as string),
+            'outlook.archiveEmail',
+          );
+        }
+        return providerWrite(
+          () => this.gmailService.archiveEmail(args.messageId as string, userId),
+          'gmail.archiveEmail',
+        );
+      }
+
       case 'create_calendar_event':
         return providerWrite(
           () => this.createCalendarEvent(args, userId, sessionId),
@@ -520,40 +555,6 @@ export class ToolExecutionService {
             userId,
           ),
           'gmail.markRead',
-        );
-      }
-
-      case 'delete_email': {
-        // Organisational action — direct execute, no confirmation gate
-        const provider = await this.userEmailProvider(userId);
-        if (provider === 'outlook') {
-          return providerWrite(
-            () => this.emailRouter.deleteEmail(
-              args.messageId as string,
-              false,
-              userId,
-              'outlook',
-            ),
-            'outlook.deleteEmail',
-          );
-        }
-        return providerWrite(
-          () => this.gmailService.deleteEmail(args.messageId as string, userId),
-          'gmail.deleteEmail',
-        );
-      }
-
-      case 'archive_email': {
-        // Organisational action — direct execute, no confirmation gate
-        if (await this.userEmailProvider(userId) === 'outlook') {
-          return providerWrite(
-            () => this.outlookTransport.archive(userId, args.messageId as string),
-            'outlook.archiveEmail',
-          );
-        }
-        return providerWrite(
-          () => this.gmailService.archiveEmail(args.messageId as string, userId),
-          'gmail.archiveEmail',
         );
       }
 
