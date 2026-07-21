@@ -7,24 +7,12 @@ import {
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { ApiTags, ApiOperation, ApiBody, ApiResponse } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { InviteCodesService } from './invite-codes.service';
 import { Public } from '../decorators/public.decorator';
-
-interface RegisterDto {
-  email: string;
-  password: string;
-  displayName?: string;
-  inviteCode?: string;
-  /** Company name — creates the user's organization (new-org path only) */
-  companyName?: string;
-}
-
-interface LoginDto {
-  email: string;
-  password: string;
-}
+import { RegisterDto, LoginDto } from './dto/auth.dto';
 
 /**
  * Auth endpoints — both are public (no API key required).
@@ -46,6 +34,9 @@ export class AuthController {
     private readonly inviteCodes: InviteCodesService,
   ) {}
 
+  // Abuse guard, far stricter than the global 120/min limit. Registration is
+  // invite-gated anyway, so 5 attempts/min per IP is ample.
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('register')
   @ApiOperation({ summary: 'Register a new user account (invite-only)' })
   @ApiBody({ schema: { example: { email: 'user@example.com', password: 'password123', displayName: 'Jane', inviteCode: 'your-invite-code' } } })
@@ -90,6 +81,8 @@ export class AuthController {
     return tokens;
   }
 
+  // Stricter than the global limit to slow credential-stuffing / brute force.
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('login')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Authenticate and receive a JWT' })
