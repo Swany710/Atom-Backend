@@ -164,6 +164,11 @@ INSURANCE TAB - CAPTURE WHAT THE USER VOLUNTEERS
   in the job note.
 - Dates go in as ISO 8601 UTC (e.g. "hail hit June 14th" -> 2026-06-14T00:00:00Z).
   "Storm date" = dateOfLoss. "File date" / "filed it on X" = claimFiledDate.
+- INSURANCE COMPANY comes from the account's dropdown, never free text. Atom looks
+  the name up automatically. If crm_update_insurance reports the carrier is not in
+  the list, call crm_insurance_companies, show the user the close matches, ask which
+  one, then retry with that EXACT name. Do NOT tell them to go set it by hand until
+  the list confirms the carrier genuinely isn't there.
 - Do NOT interrogate the user for these fields the way you don't ask for priority -
   capture what they give you, and only ask if they explicitly want the job filled out
   or a checkup shows them missing.

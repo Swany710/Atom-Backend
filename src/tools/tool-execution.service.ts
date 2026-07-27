@@ -364,6 +364,12 @@ export class ToolExecutionService {
         );
       }
 
+      case 'crm_insurance_companies': {
+        const denied = await this.crmPolicy.checkCrmAccess();
+        if (denied) return denied;
+        return this.accuLynx.getInsuranceCompanies();
+      }
+
       case 'crm_update_job_details': {
         const denied = await this.crmPolicy.checkJobAccess(args.jobId as string);
         if (denied) return denied;

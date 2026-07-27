@@ -113,6 +113,18 @@ export class AccuLynxController {
     return this.crm.getJobSettings();
   }
 
+  /**
+   * GET /api/v1/integrations/crm/insurance-companies — the carriers in this
+   * account's Insurance tab dropdown (Account Settings → Insurance Companies).
+   * Diagnostic + source of truth for matching a spoken carrier name to an id.
+   */
+  @Get('insurance-companies')
+  async getInsuranceCompanies() {
+    const denied = await this.policy.checkCrmAccess();
+    if (denied) return denied;
+    return this.crm.getInsuranceCompanies();
+  }
+
   /** POST /api/v1/integrations/crm/leads — auto-assigns to the creator's mapped AccuLynx user */
   @Post('leads')
   async createLead(@Body() body: {

@@ -375,6 +375,20 @@ export class ToolDefinitionsService {
         },
       },
       {
+        name: 'crm_insurance_companies',
+        description:
+          "List the insurance carriers in this AccuLynx account's Insurance-tab dropdown " +
+          '(Account Settings → Insurance Companies), with whether each is active. Read-only, ' +
+          'no confirmation needed. Use it when the user asks what carriers are available, ' +
+          'and ALWAYS use it to check the exact spelling before setting an insurance company ' +
+          'that crm_update_insurance just rejected as not-in-the-list.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {},
+          required: [],
+        },
+      },
+      {
         name: 'crm_update_job_details',
         description:
           'Update the Job Details / location tab on an AccuLynx job: job address (street, ' +

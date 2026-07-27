@@ -1002,13 +1002,40 @@ export class AccuLynxService {
       };
       let matchedCarrier: { id: string; name: string } | undefined;
       if (info.insuranceCompanyName) {
-        // Look the carrier up in the account's dropdown FIRST — "State Farm" is
-        // a managed company on most accounts, so sending it as free text (which
-        // forces "Other") is both wrong and liable to 412.
+        // The carrier must come from the account's managed dropdown. Free text
+        // gets filed under "Other" (which is disabled on this account anyway),
+        // so if there's no match we REFUSE and report the real options rather
+        // than quietly writing junk into the tab.
         matchedCarrier = await this.resolveInsuranceCompany(info.insuranceCompanyName);
-        payload.insuranceCompany = matchedCarrier
-          ? { insuranceCompanyId: matchedCarrier.id, insuranceCompanyName: null }
-          : { insuranceCompanyId: null, insuranceCompanyName: info.insuranceCompanyName };
+        if (!matchedCarrier) {
+          const list = await this.getInsuranceCompanies();
+          if (!list.success) {
+            return {
+              success: false,
+              error:
+                `Could not read this account's insurance company list (${list.error}), so ` +
+                `"${info.insuranceCompanyName}" could not be matched. Nothing was changed.`,
+            };
+          }
+          const active = (list.data ?? []).filter(c => c.isActive !== false);
+          const needle = info.insuranceCompanyName.trim().toLowerCase().split(/\s+/)[0];
+          const near = active
+            .filter(c => c.name.toLowerCase().includes(needle))
+            .slice(0, 8)
+            .map(c => c.name);
+          return {
+            success: false,
+            error:
+              `"${info.insuranceCompanyName}" is not in this AccuLynx account's insurance ` +
+              `company dropdown, so nothing was written to the Insurance tab. ` +
+              (near.length
+                ? `Closest matches in the list: ${near.join(', ')}. Ask which one to use, then retry with that exact name.`
+                : `The list has ${active.length} active carriers and none contain "${needle}". ` +
+                  `Add the carrier in AccuLynx (Account Settings → Insurance Companies) and try again.`),
+            data: { requested: info.insuranceCompanyName, candidates: near, activeCount: active.length },
+          };
+        }
+        payload.insuranceCompany = { insuranceCompanyId: matchedCarrier.id, insuranceCompanyName: null };
       } else if (existing.insuranceCompany?.id) {
         payload.insuranceCompany = { insuranceCompanyId: existing.insuranceCompany.id, insuranceCompanyName: null };
       } else if (existing.customInsuranceCompanyName) {
