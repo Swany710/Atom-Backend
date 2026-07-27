@@ -42,11 +42,18 @@ export class ClaudeOrchestratorService {
 
   // -- System prompt -------------------------------------------------------
 
-  /**
-   * Build the system prompt, optionally injecting the currently-active
-   * pending action so the LLM never has to guess which "yes" applies to.
-   */
-  buildSystemPrompt(activePending?: { id: string; summary: string } | null): string {
+  // ── PROMPT CACHING ────────────────────────────────────────────────────────
+  // The static prompt (~3.8k tokens) + tool definitions (~7.1k tokens) are
+  // ~11k tokens of identical preamble on EVERY call — and a single user turn
+  // makes one call per tool-loop iteration. Both are cached so we pay for that
+  // block once per ~5-minute window instead of once per request.
+  //
+  // RULE: nothing that varies per request or per day may live in the static
+  // half, or the cache prefix changes and every hit becomes a miss. The date
+  // and the active pending action therefore live in the dynamic tail below.
+
+  /** Per-request tail: today's date + any active pending action. NOT cached. */
+  private dynamicPrompt(activePending?: { id: string; summary: string } | null): string {
     const today = new Date().toLocaleDateString('en-US', {
       weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
     });
@@ -55,7 +62,52 @@ export class ClaudeOrchestratorService {
       ? `\n\nACTIVE PENDING ACTION (awaiting confirmation right now):\n  pendingActionId: ${activePending.id}\n  summary: ${activePending.summary}\nIf the user says yes/confirm/proceed/sure/go ahead, call the same tool again with this pendingActionId immediately.`
       : '';
 
-    return `You are Atom, an AI personal assistant for a roofing and contracting business. You are proactive, organized, and operate like a world-class executive assistant. Today is ${today}. All times are in Central Time (CT) unless the user specifies otherwise.
+    return `CURRENT DATE: Today is ${today}. All times are Central Time (CT) unless the user says otherwise. Use this date for every relative time ("tomorrow at 9am", "Friday at 3pm", "next Monday").${pendingBlock}`;
+  }
+
+  /**
+   * System prompt blocks for the Messages API: a cached static block followed
+   * by the per-request tail.
+   */
+  buildSystemBlocks(
+    activePending?: { id: string; summary: string } | null,
+  ): Anthropic.TextBlockParam[] {
+    return [
+      {
+        type: 'text',
+        text: ClaudeOrchestratorService.STATIC_PROMPT,
+        cache_control: { type: 'ephemeral' },
+      },
+      { type: 'text', text: this.dynamicPrompt(activePending) },
+    ];
+  }
+
+  /**
+   * Flat-string system prompt (static + tail). Kept for tests and any caller
+   * that wants the whole thing as one string; the API path uses
+   * buildSystemBlocks() so the static half can be cached.
+   */
+  buildSystemPrompt(activePending?: { id: string; summary: string } | null): string {
+    return `${ClaudeOrchestratorService.STATIC_PROMPT}\n\n${this.dynamicPrompt(activePending)}`;
+  }
+
+  /**
+   * Tool definitions with a cache breakpoint on the final entry, which caches
+   * the whole tools block (tools are sent before the system prompt, so this
+   * marker plus the one on the static prompt cache both in one prefix).
+   */
+  private cachedTools(): any[] {
+    const tools = this.toolDefs.getTools() as any[];
+    if (!tools.length) return tools;
+    return tools.map((t, i) =>
+      i === tools.length - 1
+        ? { ...t, cache_control: { type: 'ephemeral' as const } }
+        : t,
+    );
+  }
+
+  /** The cacheable half of the system prompt. Must stay byte-identical per deploy. */
+  private static readonly STATIC_PROMPT = `You are Atom, an AI personal assistant for a roofing and contracting business. You are proactive, organized, and operate like a world-class executive assistant. Today's date is given at the END of this prompt — always use that date, never guess it. All times are in Central Time (CT) unless the user specifies otherwise.
 
 You have full access to the user's:
   - Gmail - read, search, summarize, reply, send, draft, delete, archive, mark read/unread
@@ -89,7 +141,7 @@ HOW TO BEHAVE AS A PERSONAL ASSISTANT
 - Chain tools together. e.g. "What's on my plate?" --> check calendar + read emails + summarize everything.
 - If the user says something vague, interpret it helpfully and do the most useful thing.
 - When scheduling tasks: always confirm the scheduled date/time back to the user in Central Time (CT) so they can verify it's correct.
-- For relative times like "tomorrow at 9am", "Friday at 3pm", "next Monday", compute the actual date based on today's date (${today}) in CT.
+- For relative times like "tomorrow at 9am", "Friday at 3pm", "next Monday", compute the actual date from the CURRENT DATE given at the end of this prompt, in CT.
 - After scheduling, always tell the user: what will be sent/done, and exactly when (day + time CT).
 
 PERSONAL TASK REMINDERS - BE PROACTIVE
@@ -263,8 +315,7 @@ NEVER apply a "yes" to an earlier turn in the conversation history.
 Look at your very last message — that is what the user is confirming.
 If your last message asked "Shall I delete 20 PetSmart emails?", then "yes" = delete those emails.
 If your last message asked about a calendar event, then "yes" = confirm that event.
-Do NOT reach back to earlier conversation turns when processing a confirmation.${pendingBlock}`.trim();
-  }
+Do NOT reach back to earlier conversation turns when processing a confirmation.`.trim();
 
   /** Legacy getter — delegates to buildSystemPrompt() with no active pending. */
   get systemPrompt(): string {
@@ -320,11 +371,13 @@ Do NOT reach back to earlier conversation turns when processing a confirmation.$
       { role: 'user', content: userMessage },
     ];
 
-    const tools = this.toolDefs.getTools();
+    // Cache breakpoint on the last tool → the whole ~7k tool block is cached.
+    const tools = this.cachedTools();
     const toolCallsExecuted: Array<{ tool: string; args: unknown; result: unknown }> = [];
 
     const activePending = this.extractActivePending(history);
-    const systemMsg = this.buildSystemPrompt(activePending);
+    // Cached static block + per-request tail (see PROMPT CACHING above).
+    const systemMsg = this.buildSystemBlocks(activePending);
 
     let response = await providerAI(
       () => this.anthropic.messages.create({
@@ -433,12 +486,14 @@ Do NOT reach back to earlier conversation turns when processing a confirmation.$
       { role: 'user', content: userMessage },
     ];
 
-    const tools = this.toolDefs.getTools();
+    // Cache breakpoint on the last tool → the whole ~7k tool block is cached.
+    const tools = this.cachedTools();
     const toolCallsExecuted: Array<{ tool: string; args: unknown; result: unknown }> = [];
 
     // Phase 1: tool-use loop (non-streaming)
     const activePending = this.extractActivePending(history);
-    const systemMsg = this.buildSystemPrompt(activePending);
+    // Cached static block + per-request tail (see PROMPT CACHING above).
+    const systemMsg = this.buildSystemBlocks(activePending);
 
     let response = await providerAI(
       () => this.anthropic.messages.create({
