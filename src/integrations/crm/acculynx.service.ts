@@ -540,6 +540,19 @@ export class AccuLynxService {
     workType?:    string;   // e.g. Insurance, Repair, New
     tradeTypes?:  string[]; // e.g. ["Roofing", "Siding"]
     leadSource?:  string;   // company lead source name (matches "source" too)
+    /**
+     * Insurance-tab fields. Written to the job's insurance window right after
+     * the job is created (PUT /jobs/{id}/insurance) so claim info the user
+     * gave up front lands in the Insurance tab instead of only in the note.
+     * Record-keeping only — see the UPPA guardrail in the system prompt.
+     */
+    insuranceCompanyName?: string;
+    claimNumber?:    string;
+    dateOfLoss?:     string;   // storm / date-of-loss, ISO 8601 UTC
+    claimFiled?:     boolean;
+    claimFiledDate?: string;   // date the claim was filed, ISO 8601 UTC
+    damageLocation?: string;
+    hasPaperwork?:   boolean;
     /** Auto-assign the new job to this AccuLynx user (creator's mapping) */
     assignToAcculynxUserId?: string;
   }): Promise<CrmResult> {
@@ -681,6 +694,40 @@ export class AccuLynxService {
         }
       }
 
+      // ── 4. Insurance tab (best-effort) ───────────────────────────────
+      // Claim info given at intake belongs in the job's Insurance window, not
+      // buried in the note. Never fatal — the lead already exists at this point.
+      const insuranceFields = {
+        insuranceCompanyName: lead.insuranceCompanyName,
+        claimNumber:    lead.claimNumber,
+        dateOfLoss:     lead.dateOfLoss,
+        claimFiled:     lead.claimFiled,
+        claimFiledDate: lead.claimFiledDate,
+        damageLocation: lead.damageLocation,
+        hasPaperwork:   lead.hasPaperwork,
+      };
+      const hasInsuranceInfo = Object.values(insuranceFields).some(v => v !== undefined && v !== null && v !== '');
+      let insuranceNote = '';
+      if (jobId && hasInsuranceInfo) {
+        try {
+          const ins = await this.updateJobInsurance(jobId, insuranceFields);
+          insuranceNote = ins.success
+            ? ` Insurance tab filled in (${[
+                lead.insuranceCompanyName && 'carrier',
+                lead.claimNumber          && 'claim #',
+                lead.dateOfLoss           && 'date of loss',
+                lead.claimFiledDate       && 'date filed',
+                lead.damageLocation       && 'damage location',
+              ].filter(Boolean).join(', ')}).${ins.message && ins.message !== 'Insurance info updated.' ? ' ' + ins.message : ''}`
+            : ` Note: the lead was created but the insurance info did not save — ${ins.error}. Add it on the job's Insurance tab.`;
+        } catch (insErr: any) {
+          this.logger.warn(
+            `Lead ${jobId} created but insurance write failed: ${insErr.response?.data?.title ?? insErr.message}`,
+          );
+          insuranceNote = ' Note: the lead was created but the insurance info did not save — add it on the job\'s Insurance tab.';
+        }
+      }
+
       const unresolvedNote = unresolved.length
         ? ` Note: could not match ${unresolved.join(', ')} to this company's AccuLynx settings — set manually if needed.`
         : '';
@@ -689,10 +736,152 @@ export class AccuLynxService {
         data: { contactId, jobId, job: jobRes.data, assigned },
         message: (assigned
           ? 'Lead created and assigned to you (contact + job in Lead milestone).'
-          : 'Lead created successfully (contact + job in Lead milestone).') + unresolvedNote,
+          : 'Lead created successfully (contact + job in Lead milestone).') + insuranceNote + unresolvedNote,
       };
     } catch (err: any) {
       this.logger.error('createLead error:', err.response?.data ?? err.message);
+      return { success: false, error: err.response?.data?.title ?? err.response?.data?.message ?? err.message };
+    }
+  }
+
+  // ── Job details tab: location + classification ───────────────────────────
+  //
+  // AccuLynx has NO single "update job" endpoint — every field on the Job
+  // Details tab is its own PUT (verified against the v2 OpenAPI spec):
+  //   PUT /jobs/{id}/address         { street1, street2, city, state, country, zipCode }
+  //   PUT /jobs/{id}/work-type       { id: int }
+  //   PUT /jobs/{id}/trade-types     { items: [{ id: uuid }] }   ← REPLACES all
+  //   PUT /jobs/{id}/job-categories  { id: uuid }
+  //   PUT /jobs/{id}/lead-source     { id: uuid }
+  //   PUT /jobs/{id}/priority        { priority: 'Normal'|'High'|'Urgent' }
+  // Each is applied independently so one rejected field never blocks the rest;
+  // the caller gets back exactly what changed and what didn't.
+
+  /**
+   * Update the Job Details / location tab. Names (work type, trades, category,
+   * lead source) are resolved to this company's AccuLynx ids automatically.
+   * Only pass the fields that should change.
+   */
+  async updateJobDetails(jobId: string, info: {
+    address?:  string;   // street1
+    street2?:  string;
+    city?:     string;
+    state?:    string;   // 2-letter, e.g. MN
+    zip?:      string;
+    country?:  string;   // defaults to US when any address part is given
+    workType?:    string;
+    tradeTypes?:  string[];  // REPLACES the job's current trade types
+    jobCategory?: string;
+    leadSource?:  string;
+    priority?:    string;    // Normal | High | Urgent
+  }): Promise<CrmResult> {
+    const { client } = await this.getClient();
+    if (!client) return this.notConfigured();
+
+    const updated: string[] = [];
+    const failed:  string[] = [];
+
+    /** Run one field's PUT; a failure is recorded, never thrown. */
+    const apply = async (label: string, fn: () => Promise<any>) => {
+      try {
+        await fn();
+        updated.push(label);
+      } catch (err: any) {
+        const detail = err.response?.data?.title ?? err.response?.data?.message ?? err.message;
+        this.logger.warn(`updateJobDetails(${jobId}) ${label} failed: ${detail}`);
+        failed.push(`${label} (${detail})`);
+      }
+    };
+
+    try {
+      // ── Location address ─────────────────────────────────────────────
+      // PUT replaces the address, so merge over what the job already has.
+      const wantsAddress = [info.address, info.street2, info.city, info.state, info.zip, info.country]
+        .some(v => v !== undefined && v !== null && v !== '');
+      if (wantsAddress) {
+        let current: any = {};
+        try {
+          current = (await client.get(`/jobs/${jobId}`)).data?.locationAddress ?? {};
+        } catch { /* fall through with an empty base */ }
+        await apply('job address', () => client.put(`/jobs/${jobId}/address`, {
+          street1: info.address ?? current.street1,
+          street2: info.street2 ?? current.street2,
+          city:    info.city    ?? current.city,
+          state:   info.state   ?? current.state,
+          country: info.country ?? current.country ?? 'US',
+          zipCode: info.zip     ?? current.zipCode,
+        }));
+      }
+
+      // ── Classification fields (names → company-specific ids) ─────────
+      const needsSettings = Boolean(
+        info.workType || info.jobCategory || info.leadSource || info.tradeTypes?.length,
+      );
+      let s: JobSettings | undefined;
+      if (needsSettings) {
+        const settings = await this.getJobSettings();
+        if (!settings.success || !settings.data) {
+          failed.push('work type / trades / category / lead source (could not load company settings)');
+        } else {
+          s = settings.data;
+        }
+      }
+
+      if (s && info.workType) {
+        const w = this.resolveByName(s.workTypes, info.workType);
+        if (w) await apply(`work type "${w.name}"`, () => client.put(`/jobs/${jobId}/work-type`, { id: w.id }));
+        else   failed.push(`work type "${info.workType}" (not in this company's AccuLynx settings)`);
+      }
+
+      if (s && info.tradeTypes?.length) {
+        const resolved: Array<{ id: any; name: string }> = [];
+        for (const name of info.tradeTypes) {
+          const t = this.resolveByName(s.tradeTypes, name);
+          if (t) resolved.push(t);
+          else   failed.push(`trade type "${name}" (not in this company's AccuLynx settings)`);
+        }
+        if (resolved.length) {
+          // NOTE: this REPLACES the job's trade types — the caller must pass
+          // the complete list, not just the additions.
+          await apply(
+            `trade types (${resolved.map(t => t.name).join(', ')})`,
+            () => client.put(`/jobs/${jobId}/trade-types`, { items: resolved.map(t => ({ id: t.id })) }),
+          );
+        }
+      }
+
+      if (s && info.jobCategory) {
+        const c = this.resolveByName(s.jobCategories, info.jobCategory);
+        if (c) await apply(`job category "${c.name}"`, () => client.put(`/jobs/${jobId}/job-categories`, { id: c.id }));
+        else   failed.push(`job category "${info.jobCategory}" (not in this company's AccuLynx settings)`);
+      }
+
+      if (s && info.leadSource) {
+        const src = this.resolveByName(s.leadSources, info.leadSource);
+        if (src) await apply(`lead source "${src.name}"`, () => client.put(`/jobs/${jobId}/lead-source`, { id: src.id }));
+        else     failed.push(`lead source "${info.leadSource}" (not in this company's AccuLynx settings)`);
+      }
+
+      if (info.priority) {
+        const p = ['Normal', 'High', 'Urgent'].find(x => x.toLowerCase() === info.priority!.trim().toLowerCase());
+        if (p) await apply(`priority ${p}`, () => client.put(`/jobs/${jobId}/priority`, { priority: p }));
+        else   failed.push(`priority "${info.priority}" (must be Normal, High, or Urgent)`);
+      }
+
+      if (!updated.length && !failed.length) {
+        return { success: true, message: 'Nothing to update.' };
+      }
+      const parts = [
+        updated.length ? `Updated ${updated.join(', ')}.` : '',
+        failed.length  ? `Could NOT update ${failed.join('; ')} — set those in AccuLynx.` : '',
+      ].filter(Boolean);
+      return {
+        success: updated.length > 0,
+        data: { updated, failed },
+        ...(updated.length ? { message: parts.join(' ') } : { error: parts.join(' ') }),
+      };
+    } catch (err: any) {
+      this.logger.error('updateJobDetails error:', err.response?.data ?? err.message);
       return { success: false, error: err.response?.data?.title ?? err.response?.data?.message ?? err.message };
     }
   }
@@ -836,25 +1025,74 @@ export class AccuLynxService {
    * new email/phone via the documented add-endpoints.
    */
   async updateJobHomeowner(jobId: string, info: {
-    firstName?: string;
-    lastName?:  string;
-    email?:     string;
-    phone?:     string;
+    firstName?:   string;
+    lastName?:    string;
+    email?:       string;
+    phone?:       string;
+    companyName?: string;
+    /** Mailing address on the contact record (separate from the job's location address) */
+    mailingStreet1?: string;
+    mailingStreet2?: string;
+    mailingCity?:    string;
+    mailingZip?:     string;
   }): Promise<CrmResult> {
-    const { client } = await this.getClient();
+    const { client, cacheKey } = await this.getClient();
     if (!client) return this.notConfigured();
     try {
       const contactId = await this.getJobPrimaryContactId(client, jobId);
       if (!contactId) return { success: false, error: 'No contact found on this job.' };
 
       const done: string[] = [];
-      if (info.firstName || info.lastName) {
+      const wantsContactPut = Boolean(
+        info.firstName || info.lastName || info.companyName ||
+        info.mailingStreet1 || info.mailingStreet2 || info.mailingCity || info.mailingZip,
+      );
+      if (wantsContactPut) {
+        // PUT /contacts/{id} REPLACES the record and requires contactTypeIds
+        // (minItems 1) + lastName. Send the merged record back, otherwise the
+        // company name / mailing address / contact types get wiped.
         const current = (await client.get(`/contacts/${contactId}`)).data ?? {};
-        await client.put(`/contacts/${contactId}`, {
-          firstName: info.firstName ?? current.firstName,
-          lastName:  info.lastName  ?? current.lastName,
-        });
-        done.push('name');
+        const contactTypeIds: string[] =
+          (current.contactTypes ?? current.contactTypeIds ?? [])
+            .map((t: any) => (typeof t === 'string' ? t : t?.id))
+            .filter(Boolean);
+        const lastName = info.lastName ?? current.lastName;
+        if (!lastName) {
+          return { success: false, error: 'AccuLynx requires a last name on the contact — provide one.' };
+        }
+        const payload: any = {
+          contactTypeIds: contactTypeIds.length
+            ? contactTypeIds
+            : await this.getDefaultContactTypeIds(client, cacheKey),
+          firstName:   info.firstName   ?? current.firstName,
+          lastName,
+          companyName: info.companyName ?? current.companyName,
+          companyJobTitle: current.companyJobTitle,
+          crossReference:  current.crossReference,
+        };
+        const mail = current.mailingAddress ?? {};
+        const wantsMailing = Boolean(
+          info.mailingStreet1 || info.mailingStreet2 || info.mailingCity || info.mailingZip,
+        );
+        if (wantsMailing || Object.keys(mail).length) {
+          payload.mailingAddress = {
+            street1: info.mailingStreet1 ?? mail.street1,
+            street2: info.mailingStreet2 ?? mail.street2,
+            city:    info.mailingCity    ?? mail.city,
+            zipCode: info.mailingZip     ?? mail.zipCode,
+            // state/country are AccuLynx numeric ids — pass through untouched
+            ...(mail.state   ? { state:   { id: mail.state.id   ?? mail.state } }   : {}),
+            ...(mail.country ? { country: { id: mail.country.id ?? mail.country } } : {}),
+          };
+        }
+        if (current.billingAddress) payload.billingAddress = current.billingAddress;
+        if (current.billingAddressSameAsMailingAddress !== undefined) {
+          payload.billingAddressSameAsMailingAddress = current.billingAddressSameAsMailingAddress;
+        }
+        await client.put(`/contacts/${contactId}`, payload);
+        if (info.firstName || info.lastName) done.push('name');
+        if (info.companyName) done.push('company name');
+        if (wantsMailing) done.push('mailing address');
       }
       if (info.email) {
         await client.post(`/contacts/${contactId}/email-addresses`, {
@@ -942,6 +1180,15 @@ export class AccuLynxService {
           milestone: job.currentMilestone?.name ?? job.currentMilestone,
           workType:  job.workType?.name ?? job.workType ?? null,
           tradeTypes: (job.tradeTypes ?? []).map((t: any) => t.name ?? t),
+          // Job Details tab — current values, so Atom can read a tab back
+          // instead of only reporting what's missing (crm_update_job_details
+          // writes these).
+          location: job.locationAddress ?? null,
+          details: {
+            jobCategory: job.jobCategory?.name ?? job.jobCategory ?? null,
+            leadSource:  job.leadSource?.name  ?? job.leadSource  ?? null,
+            priority:    job.priority ?? null,
+          },
           insurance: ins,
           adjuster:  adj,
           homeowner: contact ? {

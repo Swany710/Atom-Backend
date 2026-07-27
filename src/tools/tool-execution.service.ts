@@ -364,6 +364,15 @@ export class ToolExecutionService {
         );
       }
 
+      case 'crm_update_job_details': {
+        const denied = await this.crmPolicy.checkJobAccess(args.jobId as string);
+        if (denied) return denied;
+        return providerWrite(
+          () => this.accuLynx.updateJobDetails(args.jobId as string, args as any),
+          'acculynx.updateJobDetails',
+        );
+      }
+
       case 'crm_update_insurance': {
         const denied = await this.crmPolicy.checkJobAccess(args.jobId as string);
         if (denied) return denied;
@@ -851,7 +860,30 @@ export class ToolExecutionService {
       case 'crm_add_note':
         return `Add note to CRM job ${args.jobId}`;
       case 'crm_create_lead':
-        return `Create CRM lead for ${args.firstName} ${args.lastName}`;
+        return `Create CRM lead for ${args.firstName} ${args.lastName}` +
+          (args.claimNumber || args.dateOfLoss || args.insuranceCompanyName
+            ? ` (insurance tab: ${[
+                args.insuranceCompanyName,
+                args.claimNumber ? `claim #${args.claimNumber}` : null,
+                args.dateOfLoss ? `loss ${String(args.dateOfLoss).slice(0, 10)}` : null,
+                args.claimFiledDate ? `filed ${String(args.claimFiledDate).slice(0, 10)}` : null,
+              ].filter(Boolean).join(', ')})`
+            : '');
+      case 'crm_update_job_details': {
+        const fields = [
+          args.address || args.city || args.state || args.zip
+            ? `address ${[args.address, args.city, args.state, args.zip].filter(Boolean).join(', ')}`
+            : null,
+          args.workType    ? `work type ${args.workType}` : null,
+          Array.isArray(args.tradeTypes) && args.tradeTypes.length
+            ? `trade types ${(args.tradeTypes as string[]).join(', ')} (replaces existing)` : null,
+          args.jobCategory ? `category ${args.jobCategory}` : null,
+          args.leadSource  ? `lead source ${args.leadSource}` : null,
+          args.priority    ? `priority ${args.priority}` : null,
+        ].filter(Boolean);
+        return `Update details on CRM job ${args.jobId}` +
+          (fields.length ? ` — ${fields.join('; ')}` : '');
+      }
       case 'crm_update_insurance':
         return `Update insurance info on CRM job ${args.jobId}` +
           (args.claimNumber ? ` (claim #${args.claimNumber})` : '');
@@ -880,6 +912,7 @@ export class ToolExecutionService {
       delete_calendar_event:  'calendar_event_delete',
       crm_add_note:           'crm_note_add',
       crm_create_lead:        'crm_lead_create',
+      crm_update_job_details: 'crm_lead_create',
       crm_update_insurance:   'crm_lead_create',
       crm_update_adjuster:    'crm_lead_create',
       crm_update_homeowner:   'crm_lead_create',

@@ -284,7 +284,12 @@ export class ToolDefinitionsService {
           'and any notes. Pass names as plain text — they are matched to the company\'s AccuLynx ' +
           'settings automatically. Only firstName/lastName are required; create the lead with ' +
           'whatever the user has rather than blocking on missing fields. The new job is ' +
-          'auto-assigned to the requesting user\'s AccuLynx account.',
+          'auto-assigned to the requesting user\'s AccuLynx account. ' +
+          'INSURANCE TAB: if the user mentions any claim details (insurance company, claim number, ' +
+          'storm date / date of loss, date the claim was filed, damage location, paperwork), pass ' +
+          'them here — they are written straight to the job\'s Insurance tab instead of being lost ' +
+          'in the note. NEVER ask for these; only pass what the user volunteers. Record-keeping ' +
+          'only — the UPPA guardrail still applies.',
         input_schema: {
           type: 'object' as const,
           properties: {
@@ -301,6 +306,14 @@ export class ToolDefinitionsService {
             workType:    { type: 'string', description: 'e.g. Insurance, Repair, New' },
             tradeTypes:  { type: 'array', items: { type: 'string' }, description: 'e.g. ["Roofing","Siding"]' },
             leadSource:  { type: 'string', description: 'how the lead found the company' },
+            // ── Insurance tab (only pass what the user volunteers) ──
+            insuranceCompanyName: { type: 'string', description: 'carrier name, e.g. State Farm' },
+            claimNumber:          { type: 'string' },
+            dateOfLoss:           { type: 'string', description: 'storm / date of loss, ISO 8601 UTC e.g. 2026-06-14T00:00:00Z' },
+            claimFiled:           { type: 'boolean' },
+            claimFiledDate:       { type: 'string', description: 'date the claim was filed, ISO 8601 UTC' },
+            damageLocation:       { type: 'string', description: 'e.g. Roof, Siding, Whole home' },
+            hasPaperwork:         { type: 'boolean', description: 'signed paperwork collected' },
             notes:           { type: 'string' },
             pendingActionId: { type: 'string' },
           },
@@ -362,6 +375,36 @@ export class ToolDefinitionsService {
         },
       },
       {
+        name: 'crm_update_job_details',
+        description:
+          'Update the Job Details / location tab on an AccuLynx job: job address (street, ' +
+          'city, state, zip), work type, trade types, job category, lead source, priority. ' +
+          'Pass names as plain text — they are matched to the company\'s AccuLynx settings ' +
+          'automatically. IMPORTANT: tradeTypes REPLACES the job\'s current trade types, so ' +
+          'pass the COMPLETE list (if the job is Roofing and the user adds Siding, pass both). ' +
+          'Run crm_job_checkup first if you need the current values. Each field is applied ' +
+          'independently — the result says exactly what saved and what did not. ' +
+          'REQUIRE confirmation before calling. Only pass fields the user provided.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            jobId:       { type: 'string' },
+            address:     { type: 'string', description: 'street address (street1)' },
+            street2:     { type: 'string', description: 'apt/unit' },
+            city:        { type: 'string' },
+            state:       { type: 'string', description: '2-letter state, e.g. MN' },
+            zip:         { type: 'string' },
+            workType:    { type: 'string', description: 'e.g. Insurance, Retail, Repair, New' },
+            tradeTypes:  { type: 'array', items: { type: 'string' }, description: 'COMPLETE list — replaces existing, e.g. ["Roofing","Siding"]' },
+            jobCategory: { type: 'string', description: 'e.g. Residential, Commercial' },
+            leadSource:  { type: 'string' },
+            priority:    { type: 'string', enum: ['Normal', 'High', 'Urgent'] },
+            pendingActionId: { type: 'string' },
+          },
+          required: ['jobId'],
+        },
+      },
+      {
         name: 'crm_update_insurance',
         description:
           'Update the insurance window on an AccuLynx job: insurance company, claim number, ' +
@@ -410,8 +453,11 @@ export class ToolDefinitionsService {
       {
         name: 'crm_update_homeowner',
         description:
-          'Update the homeowner (primary contact) on an AccuLynx job: name, email, phone. ' +
-          'REQUIRE confirmation before calling. Only pass fields the user provided.',
+          'Update the homeowner (primary contact tab) on an AccuLynx job: name, email, phone, ' +
+          'company name, and the contact\'s mailing address. NOTE: the mailing address on the ' +
+          'contact is NOT the job\'s location address — use crm_update_job_details to change ' +
+          'where the work happens. REQUIRE confirmation before calling. Only pass fields the ' +
+          'user provided.',
         input_schema: {
           type: 'object' as const,
           properties: {
@@ -420,6 +466,11 @@ export class ToolDefinitionsService {
             lastName:        { type: 'string' },
             email:           { type: 'string' },
             phone:           { type: 'string', description: '10-digit US phone' },
+            companyName:     { type: 'string' },
+            mailingStreet1:  { type: 'string', description: "contact's mailing street" },
+            mailingStreet2:  { type: 'string' },
+            mailingCity:     { type: 'string' },
+            mailingZip:      { type: 'string' },
             pendingActionId: { type: 'string' },
           },
           required: ['jobId'],
@@ -565,6 +616,7 @@ export class ToolDefinitionsService {
     'delete_calendar_event',
     'crm_add_note',
     'crm_create_lead',
+    'crm_update_job_details',
     'crm_update_insurance',
     'crm_update_adjuster',
     'crm_update_homeowner',
