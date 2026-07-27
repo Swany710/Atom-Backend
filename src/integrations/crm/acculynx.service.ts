@@ -803,12 +803,19 @@ export class AccuLynxService {
         try {
           current = (await client.get(`/jobs/${jobId}`)).data?.locationAddress ?? {};
         } catch { /* fall through with an empty base */ }
+        // GET returns state/country as OBJECTS ({abbreviation, name, id}) but the
+        // PUT takes plain STRINGS (maxLength 50). Passing the object straight
+        // through is a 400 — flatten it first.
+        const flatten = (v: any): string | undefined =>
+          v == null ? undefined
+          : typeof v === 'string' ? v
+          : (v.abbreviation ?? v.code ?? v.name ?? undefined);
         await apply('job address', () => client.put(`/jobs/${jobId}/address`, {
           street1: info.address ?? current.street1,
-          street2: info.street2 ?? current.street2,
+          street2: info.street2 ?? flatten(current.street2),
           city:    info.city    ?? current.city,
-          state:   info.state   ?? current.state,
-          country: info.country ?? current.country ?? 'US',
+          state:   info.state   ?? flatten(current.state),
+          country: info.country ?? flatten(current.country) ?? 'US',
           zipCode: info.zip     ?? current.zipCode,
         }));
       }
@@ -886,6 +893,67 @@ export class AccuLynxService {
     }
   }
 
+  // ── Managed insurance companies (the Insurance tab dropdown) ─────────────
+
+  /** cacheKey → the account's managed carrier list; reuse the settings TTL. */
+  private readonly insuranceCompanyCache = new Map<string, { data: Array<{ id: string; name: string; isActive?: boolean }>; at: number }>();
+
+  /**
+   * GET /company-settings/job-file-settings/insurance-companies — the carriers
+   * in the account's dropdown. Paginated (pageSize default 50, offset param is
+   * `recordStartIndex`), so page until we have them all.
+   */
+  async getInsuranceCompanies(): Promise<CrmResult<Array<{ id: string; name: string; isActive?: boolean }>>> {
+    const { client, cacheKey } = await this.getClient();
+    if (!client) return this.notConfigured();
+
+    const hit = this.insuranceCompanyCache.get(cacheKey);
+    if (hit && Date.now() - hit.at < AccuLynxService.SETTINGS_TTL_MS) {
+      return { success: true, data: hit.data };
+    }
+
+    try {
+      const all: Array<{ id: string; name: string; isActive?: boolean }> = [];
+      let recordStartIndex = 0;
+      const pageSize = 100;
+      for (let page = 0; page < 20; page++) {   // hard cap: 2,000 carriers
+        const res = await client.get('/company-settings/job-file-settings/insurance-companies', {
+          params: { pageSize, recordStartIndex },
+        });
+        const items = res.data?.items ?? [];
+        all.push(...items.map((c: any) => ({ id: c.id, name: c.name, isActive: c.isActive })));
+        const count = res.data?.count ?? all.length;
+        recordStartIndex += items.length;
+        if (!items.length || all.length >= count) break;
+      }
+      this.insuranceCompanyCache.set(cacheKey, { data: all, at: Date.now() });
+      return { success: true, data: all };
+    } catch (err: any) {
+      this.logger.warn(`getInsuranceCompanies failed: ${err.response?.data?.message ?? err.message}`);
+      return { success: false, error: err.response?.data?.message ?? err.message };
+    }
+  }
+
+  /**
+   * Match a carrier name the user said ("State Farm", "state farm insurance")
+   * to an entry in the account's managed dropdown. Only ACTIVE carriers are
+   * matched — an inactive one can't be assigned.
+   */
+  private async resolveInsuranceCompany(name: string): Promise<{ id: string; name: string } | undefined> {
+    const list = await this.getInsuranceCompanies();
+    if (!list.success || !list.data?.length) return undefined;
+    const active = list.data.filter(c => c.isActive !== false);
+    const n = name.trim().toLowerCase();
+    // exact → starts-with → contains (either direction, so "State Farm" also
+    // matches a managed "State Farm Insurance Co.")
+    return (
+      active.find(c => c.name.trim().toLowerCase() === n) ??
+      active.find(c => c.name.trim().toLowerCase().startsWith(n)) ??
+      active.find(c => c.name.trim().toLowerCase().includes(n)) ??
+      active.find(c => n.includes(c.name.trim().toLowerCase()))
+    );
+  }
+
   // ── Job windows: insurance / adjuster / homeowner ────────────────────────
 
   /** GET /jobs/{id}/insurance — claim + insurance company info */
@@ -903,8 +971,11 @@ export class AccuLynxService {
 
   /**
    * PUT /jobs/{id}/insurance — set claim/insurance info.
-   * insuranceCompanyName goes through as free text (assigned to the "Other"
-   * company when it isn't in the account's managed list).
+   *
+   * The carrier is set BY ID whenever the name matches the account's managed
+   * dropdown (GET .../insurance-companies). Only a genuinely unmanaged carrier
+   * falls back to free text, which AccuLynx files under "Other" — and "Other"
+   * is disabled on some accounts, which is what produces the 412 below.
    */
   async updateJobInsurance(jobId: string, info: {
     insuranceCompanyName?: string;
@@ -929,8 +1000,15 @@ export class AccuLynxService {
         claimNumber:    info.claimNumber    ?? existing.claimNumber,
         hasPaperwork:   info.hasPaperwork   ?? existing.hasPaperwork,
       };
+      let matchedCarrier: { id: string; name: string } | undefined;
       if (info.insuranceCompanyName) {
-        payload.insuranceCompany = { insuranceCompanyId: null, insuranceCompanyName: info.insuranceCompanyName };
+        // Look the carrier up in the account's dropdown FIRST — "State Farm" is
+        // a managed company on most accounts, so sending it as free text (which
+        // forces "Other") is both wrong and liable to 412.
+        matchedCarrier = await this.resolveInsuranceCompany(info.insuranceCompanyName);
+        payload.insuranceCompany = matchedCarrier
+          ? { insuranceCompanyId: matchedCarrier.id, insuranceCompanyName: null }
+          : { insuranceCompanyId: null, insuranceCompanyName: info.insuranceCompanyName };
       } else if (existing.insuranceCompany?.id) {
         payload.insuranceCompany = { insuranceCompanyId: existing.insuranceCompany.id, insuranceCompanyName: null };
       } else if (existing.customInsuranceCompanyName) {
@@ -947,14 +1025,20 @@ export class AccuLynxService {
           return {
             success: true,
             message:
-              'Claim info updated, but the insurance company name could not be set — ' +
-              'this AccuLynx account requires the "Other" insurance company to be enabled ' +
-              'in Account Settings (or pick a managed insurance company inside AccuLynx).',
+              `Claim info updated, but "${info.insuranceCompanyName}" could not be set as the ` +
+              'insurance company: it is not in this account\'s managed carrier list, and the ' +
+              '"Other" insurance company is disabled in Account Settings. Add the carrier in ' +
+              'AccuLynx (Account Settings → Insurance Companies) or enable "Other".',
           };
         }
         throw putErr;
       }
-      return { success: true, message: 'Insurance info updated.' };
+      return {
+        success: true,
+        message: matchedCarrier
+          ? `Insurance info updated (carrier set to "${matchedCarrier.name}" from the AccuLynx list).`
+          : 'Insurance info updated.',
+      };
     } catch (err: any) {
       this.logger.error('updateJobInsurance error:', err.response?.data ?? err.message);
       return { success: false, error: err.response?.data?.title ?? err.response?.data?.message ?? err.message };
