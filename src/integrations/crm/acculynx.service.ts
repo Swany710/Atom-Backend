@@ -800,24 +800,37 @@ export class AccuLynxService {
         .some(v => v !== undefined && v !== null && v !== '');
       if (wantsAddress) {
         let current: any = {};
+        let readCurrent = false;
         try {
           current = (await client.get(`/jobs/${jobId}`)).data?.locationAddress ?? {};
-        } catch { /* fall through with an empty base */ }
-        // GET returns state/country as OBJECTS ({abbreviation, name, id}) but the
-        // PUT takes plain STRINGS (maxLength 50). Passing the object straight
-        // through is a 400 — flatten it first.
-        const flatten = (v: any): string | undefined =>
-          v == null ? undefined
-          : typeof v === 'string' ? v
-          : (v.abbreviation ?? v.code ?? v.name ?? undefined);
-        await apply('job address', () => client.put(`/jobs/${jobId}/address`, {
-          street1: info.address ?? current.street1,
-          street2: info.street2 ?? flatten(current.street2),
-          city:    info.city    ?? current.city,
-          state:   info.state   ?? flatten(current.state),
-          country: info.country ?? flatten(current.country) ?? 'US',
-          zipCode: info.zip     ?? current.zipCode,
-        }));
+          readCurrent = true;
+        } catch { /* unassigned leads aren't returned by GET /jobs/{id} */ }
+        // PUT replaces the address. If we couldn't read what's there, only
+        // write when the caller supplied a COMPLETE address — otherwise a
+        // one-field edit would blank out the rest.
+        const complete = Boolean(info.address && info.city && info.state && info.zip);
+        if (!readCurrent && !complete) {
+          failed.push(
+            'job address (could not read the current address on this job — ' +
+            'resend with street, city, state and zip together)',
+          );
+        } else {
+          // GET returns state/country as OBJECTS ({abbreviation, name, id}) but
+          // the PUT takes plain STRINGS (maxLength 50). Passing the object
+          // straight through is a 400 — flatten it first.
+          const flatten = (v: any): string | undefined =>
+            v == null ? undefined
+            : typeof v === 'string' ? v
+            : (v.abbreviation ?? v.code ?? v.name ?? undefined);
+          await apply('job address', () => client.put(`/jobs/${jobId}/address`, {
+            street1: info.address ?? current.street1,
+            street2: info.street2 ?? flatten(current.street2),
+            city:    info.city    ?? current.city,
+            state:   info.state   ?? flatten(current.state),
+            country: info.country ?? flatten(current.country) ?? 'US',
+            zipCode: info.zip     ?? current.zipCode,
+          }));
+        }
       }
 
       // ── Classification fields (names → company-specific ids) ─────────
@@ -912,26 +925,59 @@ export class AccuLynxService {
       return { success: true, data: hit.data };
     }
 
-    try {
+    // pageSize 25: AccuLynx v2 rejects oversized pages on several collection
+    // endpoints (this one documents a 416) and 25 is the value proven to work
+    // elsewhere in this service. Also try both offset spellings — the docs call
+    // it recordStartIndex here but pageStartIndex everywhere else.
+    const PAGE = 25;
+    const attempt = async (offsetParam: 'recordStartIndex' | 'pageStartIndex') => {
       const all: Array<{ id: string; name: string; isActive?: boolean }> = [];
-      let recordStartIndex = 0;
-      const pageSize = 100;
-      for (let page = 0; page < 20; page++) {   // hard cap: 2,000 carriers
+      let offset = 0;
+      for (let page = 0; page < 40; page++) {     // hard cap: 1,000 carriers
         const res = await client.get('/company-settings/job-file-settings/insurance-companies', {
-          params: { pageSize, recordStartIndex },
+          params: { pageSize: PAGE, [offsetParam]: offset },
         });
         const items = res.data?.items ?? [];
         all.push(...items.map((c: any) => ({ id: c.id, name: c.name, isActive: c.isActive })));
         const count = res.data?.count ?? all.length;
-        recordStartIndex += items.length;
+        offset += items.length;
+        // no progress, or we have them all → stop (guards against an endpoint
+        // that ignores the offset and would otherwise loop on page 1 forever)
         if (!items.length || all.length >= count) break;
       }
-      this.insuranceCompanyCache.set(cacheKey, { data: all, at: Date.now() });
-      return { success: true, data: all };
-    } catch (err: any) {
-      this.logger.warn(`getInsuranceCompanies failed: ${err.response?.data?.message ?? err.message}`);
-      return { success: false, error: err.response?.data?.message ?? err.message };
+      return all;
+    };
+
+    let lastErr: any;
+    for (const offsetParam of ['recordStartIndex', 'pageStartIndex'] as const) {
+      try {
+        const all = await attempt(offsetParam);
+        if (all.length) {
+          this.insuranceCompanyCache.set(cacheKey, { data: all, at: Date.now() });
+          return { success: true, data: all };
+        }
+        lastErr = new Error('endpoint returned an empty carrier list');
+      } catch (err: any) {
+        lastErr = err;
+        const status = err.response?.status;
+        this.logger.warn(
+          `getInsuranceCompanies (${offsetParam}) failed: HTTP ${status ?? '?'} ` +
+          `${err.response?.data?.title ?? err.response?.data?.message ?? err.message}`,
+        );
+        // 416 = bad paging window; any other status won't be fixed by retrying
+        // with a different offset param, so stop early.
+        if (status && status !== 416) break;
+      }
     }
+    const status = lastErr?.response?.status;
+    return {
+      success: false,
+      error:
+        `Could not read the AccuLynx insurance company list ` +
+        `(GET /company-settings/job-file-settings/insurance-companies` +
+        `${status ? ` → HTTP ${status}` : ''}): ` +
+        `${lastErr?.response?.data?.title ?? lastErr?.response?.data?.message ?? lastErr?.message}`,
+    };
   }
 
   /**
@@ -943,14 +989,27 @@ export class AccuLynxService {
     const list = await this.getInsuranceCompanies();
     if (!list.success || !list.data?.length) return undefined;
     const active = list.data.filter(c => c.isActive !== false);
-    const n = name.trim().toLowerCase();
-    // exact → starts-with → contains (either direction, so "State Farm" also
-    // matches a managed "State Farm Insurance Co.")
+
+    // Normalise both sides: lowercase, drop punctuation, collapse spaces, and
+    // strip filler words. "State Farm Insurance Co." and "statefarm" both
+    // reduce to "statefarm", so either matches the managed "State Farm".
+    const norm = (s: string) => s
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\b(insurance|ins|company|co|corp|corporation|group|grp|the|of|and)\b/g, ' ')
+      .replace(/\s+/g, '')
+      .trim();
+
+    const n = norm(name);
+    if (!n) return undefined;
+    const scored = active.map(c => ({ c, k: norm(c.name) })).filter(x => x.k);
+
     return (
-      active.find(c => c.name.trim().toLowerCase() === n) ??
-      active.find(c => c.name.trim().toLowerCase().startsWith(n)) ??
-      active.find(c => c.name.trim().toLowerCase().includes(n)) ??
-      active.find(c => n.includes(c.name.trim().toLowerCase()))
+      scored.find(x => x.k === n)?.c ??
+      scored.find(x => x.k.startsWith(n))?.c ??
+      scored.find(x => n.startsWith(x.k))?.c ??
+      scored.find(x => x.k.includes(n))?.c ??
+      scored.find(x => n.includes(x.k))?.c
     );
   }
 
@@ -990,8 +1049,19 @@ export class AccuLynxService {
     if (!client) return this.notConfigured();
     try {
       // PUT replaces — merge over what's already there so partial updates
-      // don't wipe existing fields.
-      const existing = (await this.getJobInsurance(jobId)).data ?? {};
+      // don't wipe existing fields. If that read FAILED (500/timeout, as
+      // opposed to a 404 "no insurance yet"), abort: merging over {} would
+      // blank the claim number, dates and paperwork flag.
+      const existingRes = await this.getJobInsurance(jobId);
+      if (!existingRes.success) {
+        return {
+          success: false,
+          error:
+            `Could not read the job's current insurance info (${existingRes.error}), so nothing ` +
+            `was changed — writing now would erase the existing claim details. Try again.`,
+        };
+      }
+      const existing = existingRes.data ?? {};
       const payload: any = {
         damagelocation: info.damageLocation ?? existing.damagelocation,
         dateOfLoss:     info.dateOfLoss     ?? existing.dateOfLoss,
@@ -1000,53 +1070,51 @@ export class AccuLynxService {
         claimNumber:    info.claimNumber    ?? existing.claimNumber,
         hasPaperwork:   info.hasPaperwork   ?? existing.hasPaperwork,
       };
+      // The carrier must come from the account's managed dropdown. Free text
+      // gets filed under "Other" (disabled on some accounts), so an unmatched
+      // name leaves the carrier UNTOUCHED — but the claim number and dates the
+      // user gave still get saved, and we report the carrier problem.
       let matchedCarrier: { id: string; name: string } | undefined;
+      let carrierProblem: string | undefined;
+
       if (info.insuranceCompanyName) {
-        // The carrier must come from the account's managed dropdown. Free text
-        // gets filed under "Other" (which is disabled on this account anyway),
-        // so if there's no match we REFUSE and report the real options rather
-        // than quietly writing junk into the tab.
         matchedCarrier = await this.resolveInsuranceCompany(info.insuranceCompanyName);
-        if (!matchedCarrier) {
-          const list = await this.getInsuranceCompanies();
-          if (!list.success) {
-            return {
-              success: false,
-              error:
-                `Could not read this account's insurance company list (${list.error}), so ` +
-                `"${info.insuranceCompanyName}" could not be matched. Nothing was changed.`,
-            };
-          }
+        if (matchedCarrier) {
+          payload.insuranceCompany = { insuranceCompanyId: matchedCarrier.id, insuranceCompanyName: null };
+        } else {
+          const list   = await this.getInsuranceCompanies();
           const active = (list.data ?? []).filter(c => c.isActive !== false);
           const needle = info.insuranceCompanyName.trim().toLowerCase().split(/\s+/)[0];
-          const near = active
-            .filter(c => c.name.toLowerCase().includes(needle))
-            .slice(0, 8)
-            .map(c => c.name);
-          return {
-            success: false,
-            error:
-              `"${info.insuranceCompanyName}" is not in this AccuLynx account's insurance ` +
-              `company dropdown, so nothing was written to the Insurance tab. ` +
+          const near   = active.filter(c => c.name.toLowerCase().includes(needle)).slice(0, 8).map(c => c.name);
+          carrierProblem = !list.success
+            ? `The insurance company was NOT changed — ${list.error}`
+            : `The insurance company was NOT changed: "${info.insuranceCompanyName}" did not match ` +
+              `any of the ${active.length} carriers in this account's dropdown. ` +
               (near.length
-                ? `Closest matches in the list: ${near.join(', ')}. Ask which one to use, then retry with that exact name.`
-                : `The list has ${active.length} active carriers and none contain "${needle}". ` +
-                  `Add the carrier in AccuLynx (Account Settings → Insurance Companies) and try again.`),
-            data: { requested: info.insuranceCompanyName, candidates: near, activeCount: active.length },
-          };
+                ? `Closest matches: ${near.join(', ')}. Confirm which one and retry with that exact name.`
+                : `Add it in AccuLynx (Account Settings → Insurance Companies) first.`);
         }
-        payload.insuranceCompany = { insuranceCompanyId: matchedCarrier.id, insuranceCompanyName: null };
-      } else if (existing.insuranceCompany?.id) {
-        payload.insuranceCompany = { insuranceCompanyId: existing.insuranceCompany.id, insuranceCompanyName: null };
-      } else if (existing.customInsuranceCompanyName) {
-        payload.insuranceCompany = { insuranceCompanyId: null, insuranceCompanyName: existing.customInsuranceCompanyName };
       }
+
+      // Preserve whatever carrier is already on the job when we aren't setting one.
+      if (!payload.insuranceCompany) {
+        if (existing.insuranceCompany?.id) {
+          payload.insuranceCompany = { insuranceCompanyId: existing.insuranceCompany.id, insuranceCompanyName: null };
+        } else if (existing.customInsuranceCompanyName) {
+          payload.insuranceCompany = { insuranceCompanyId: null, insuranceCompanyName: existing.customInsuranceCompanyName };
+        }
+      }
+
       try {
         await client.put(`/jobs/${jobId}/insurance`, payload);
       } catch (putErr: any) {
-        // 412: setting a company NAME requires the account's "Other"
-        // insurance company to be enabled. Save everything else and say so.
-        if (putErr.response?.status === 412 && payload.insuranceCompany?.insuranceCompanyName) {
+        // 412: setting a company NAME requires the account's "Other" insurance
+        // company to be enabled. Only retry when the CALLER asked for a name —
+        // otherwise the payload just carries the job's existing carrier forward
+        // and stripping it would clear a carrier the user never touched.
+        if (putErr.response?.status === 412 &&
+            info.insuranceCompanyName &&
+            payload.insuranceCompany?.insuranceCompanyName) {
           delete payload.insuranceCompany;
           await client.put(`/jobs/${jobId}/insurance`, payload);
           return {
@@ -1062,9 +1130,12 @@ export class AccuLynxService {
       }
       return {
         success: true,
-        message: matchedCarrier
-          ? `Insurance info updated (carrier set to "${matchedCarrier.name}" from the AccuLynx list).`
-          : 'Insurance info updated.',
+        data: carrierProblem ? { carrierChanged: false } : undefined,
+        message: carrierProblem
+          ? `Claim details saved. ${carrierProblem}`
+          : matchedCarrier
+            ? `Insurance info updated (carrier set to "${matchedCarrier.name}" from the AccuLynx list).`
+            : 'Insurance info updated.',
       };
     } catch (err: any) {
       this.logger.error('updateJobInsurance error:', err.response?.data ?? err.message);
@@ -1099,7 +1170,18 @@ export class AccuLynxService {
     const { client } = await this.getClient();
     if (!client) return this.notConfigured();
     try {
-      const existing = (await this.getJobAdjuster(jobId)).data ?? {};
+      // Same hazard as insurance: PUT replaces, so a failed pre-read must abort
+      // rather than merge over {} and wipe the adjuster record.
+      const existingRes = await this.getJobAdjuster(jobId);
+      if (!existingRes.success) {
+        return {
+          success: false,
+          error:
+            `Could not read the job's current adjuster info (${existingRes.error}), so nothing ` +
+            `was changed — writing now would erase the existing adjuster details. Try again.`,
+        };
+      }
+      const existing = existingRes.data ?? {};
       const payload: any = {
         adjusterName: info.adjusterName ?? existing.adjusterName,
         email:        info.email        ?? existing.email,
@@ -1152,6 +1234,16 @@ export class AccuLynxService {
     try {
       const contactId = await this.getJobPrimaryContactId(client, jobId);
       if (!contactId) return { success: false, error: 'No contact found on this job.' };
+
+      // Validate the phone BEFORE any write. The email POST is append-only, so
+      // failing halfway and being retried would duplicate the email address.
+      let phoneDigits: string | undefined;
+      if (info.phone) {
+        phoneDigits = info.phone.replace(/\D/g, '').replace(/^1(?=\d{10}$)/, '');
+        if (!/^\d{10}$/.test(phoneDigits)) {
+          return { success: false, error: `Phone must be 10 digits — got "${info.phone}". Nothing was changed.` };
+        }
+      }
 
       const done: string[] = [];
       const wantsContactPut = Boolean(
@@ -1211,13 +1303,9 @@ export class AccuLynxService {
         });
         done.push('email');
       }
-      if (info.phone) {
-        const digits = info.phone.replace(/\D/g, '').replace(/^1(?=\d{10}$)/, '');
-        if (!/^\d{10}$/.test(digits)) {
-          return { success: false, error: `Phone must be 10 digits — got "${info.phone}".` };
-        }
+      if (phoneDigits) {
         await client.post(`/contacts/${contactId}/phone-numbers`, {
-          number: digits, primary: true, type: 'Mobile',
+          number: phoneDigits, primary: true, type: 'Mobile',
         });
         done.push('phone');
       }
@@ -1239,13 +1327,17 @@ export class AccuLynxService {
     const { client } = await this.getClient();
     if (!client) return this.notConfigured();
     try {
+      // GET /jobs/{id} does NOT return unassigned leads — which are exactly the
+      // jobs a checkup gets run on. Keep it out of the all-or-nothing path so a
+      // lead still gets a partial report instead of a hard failure.
       const [jobRes, insurance, adjuster, reps] = await Promise.all([
-        client.get(`/jobs/${jobId}`),
+        client.get(`/jobs/${jobId}`).catch(() => null),
         this.getJobInsurance(jobId),
         this.getJobAdjuster(jobId),
         this.getJobRepresentativeIds(jobId),
       ]);
-      const job = jobRes.data ?? {};
+      const job = jobRes?.data ?? {};
+      const jobReadable = jobRes !== null;
 
       // Primary contact details (email/phone live on the contact record)
       let contact: any = null;
@@ -1261,6 +1353,13 @@ export class AccuLynxService {
       const ins = insurance.data ?? {};
       const adj = adjuster.data ?? {};
       const missing: string[] = [];
+      // A field is only "missing" if we could actually READ that window.
+      // An unreadable window is reported separately — never as missing data,
+      // which would send the user hunting for info that is already there.
+      const unreadable: string[] = [];
+      if (!jobReadable)       unreadable.push('job details (address, trades, work type)');
+      if (!insurance.success) unreadable.push('insurance window');
+      if (!adjuster.success)  unreadable.push('adjuster window');
 
       if (!contact) missing.push('homeowner contact');
       else {
@@ -1269,19 +1368,23 @@ export class AccuLynxService {
         if (!hasPhone) missing.push('homeowner phone number');
         if (!hasEmail) missing.push('homeowner email');
       }
-      if (!job.locationAddress?.street1) missing.push('job address');
-      if (!(job.tradeTypes ?? []).length) missing.push('trade type(s)');
-      if (!job.workType) missing.push('work type');
+      if (jobReadable) {
+        if (!job.locationAddress?.street1) missing.push('job address');
+        if (!(job.tradeTypes ?? []).length) missing.push('trade type(s)');
+        if (!job.workType) missing.push('work type');
+      }
       if (!(reps.data ?? []).length) missing.push('assigned company rep');
 
       const isInsuranceJob = (job.workType?.name ?? job.workType ?? '')
         .toString().toLowerCase().includes('insur');
       if (isInsuranceJob) {
-        if (!ins.insuranceCompany && !ins.customInsuranceCompanyName) missing.push('insurance company');
-        if (!ins.claimNumber) missing.push('claim number');
-        if (!ins.dateOfLoss) missing.push('date of loss');
-        if (!adj.adjusterName) missing.push('adjuster name');
-        if (!ins.hasPaperwork) missing.push('paperwork (hasPaperwork unchecked)');
+        if (insurance.success) {
+          if (!ins.insuranceCompany && !ins.customInsuranceCompanyName) missing.push('insurance company');
+          if (!ins.claimNumber) missing.push('claim number');
+          if (!ins.dateOfLoss) missing.push('date of loss');
+          if (!ins.hasPaperwork) missing.push('paperwork (hasPaperwork unchecked)');
+        }
+        if (adjuster.success && !adj.adjusterName) missing.push('adjuster name');
       }
 
       return {
@@ -1307,8 +1410,13 @@ export class AccuLynxService {
             emails: (contact.emailAddresses ?? []).map((e: any) => e.address ?? e),
             phones: (contact.phoneNumbers ?? []).map((p: any) => p.number ?? p),
           } : null,
-          readyToSubmit: missing.length === 0,
+          // Only claim "ready" when every window was actually readable —
+          // otherwise we'd greenlight a job on incomplete information.
+          readyToSubmit: missing.length === 0 && unreadable.length === 0,
           missing,
+          // Windows AccuLynx would not return. NOT the same as missing data —
+          // tell the user these could not be checked rather than that they're empty.
+          unreadable,
         },
       };
     } catch (err: any) {

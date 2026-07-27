@@ -364,12 +364,6 @@ export class ToolExecutionService {
         );
       }
 
-      case 'crm_insurance_companies': {
-        const denied = await this.crmPolicy.checkCrmAccess();
-        if (denied) return denied;
-        return this.accuLynx.getInsuranceCompanies();
-      }
-
       case 'crm_update_job_details': {
         const denied = await this.crmPolicy.checkJobAccess(args.jobId as string);
         if (denied) return denied;
@@ -640,6 +634,15 @@ export class ToolExecutionService {
             args.scope === 'all' ? 'all' : 'mine',
           ),
           'acculynx.getMyPipeline',
+        );
+      }
+
+      case 'crm_insurance_companies': {
+        const denied = await this.crmPolicy.checkCrmAccess();
+        if (denied) return denied;
+        return providerRead(
+          () => this.accuLynx.getInsuranceCompanies(),
+          'acculynx.getInsuranceCompanies',
         );
       }
 
