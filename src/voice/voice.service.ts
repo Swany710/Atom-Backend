@@ -46,8 +46,11 @@ export class VoiceService {
     userId: string,
     conversationId?: string,
     mimeType?: string,
+    options?: { synthesise?: boolean },
   ) {
-    return this.pipeline.processVoiceCommand(audioBuffer, userId, conversationId, mimeType);
+    return this.pipeline.processVoiceCommand(
+      audioBuffer, userId, conversationId, mimeType, options,
+    );
   }
 
   processVoiceCommandFast(

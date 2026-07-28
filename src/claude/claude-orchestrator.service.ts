@@ -29,6 +29,29 @@ export class ClaudeOrchestratorService {
   // code change + redeploy — just update the variable and restart.
   static readonly MODEL = process.env.CLAUDE_MODEL || 'claude-sonnet-4-5-20250929';
 
+  /**
+   * Hard ceiling on tool-use round trips per user turn.
+   *
+   * The loop below used to be `while (stop_reason === 'tool_use')` with no cap.
+   * A model that keeps re-calling a failing tool (a CRM 500, a bad search that
+   * returns nothing, two tools that feed each other) would spin indefinitely:
+   * one Anthropic call per iteration, the HTTP request never returning, spend
+   * climbing with no upper bound. Twelve is comfortably above the deepest real
+   * chain (pipeline review ≈ 5) while making a runaway loop impossible.
+   */
+  static readonly MAX_TOOL_ITERATIONS = Number(process.env.CLAUDE_MAX_TOOL_ITERATIONS) || 12;
+
+  /**
+   * Output token budget per Anthropic call.
+   *
+   * Was hardcoded to 1024, which truncated exactly the answers this assistant
+   * exists to give — "summarize my 20 emails", "plan my week", a job checkup
+   * rundown — mid-sentence, with no indication to the user that the reply was
+   * cut off. 4096 fits those without materially changing cost (output tokens
+   * are billed as used, not as budgeted).
+   */
+  static readonly MAX_TOKENS = Number(process.env.CLAUDE_MAX_TOKENS) || 4096;
+
   constructor(
     private readonly config: ConfigService,
     private readonly memory: ConversationMemoryService,
@@ -382,7 +405,7 @@ Do NOT reach back to earlier conversation turns when processing a confirmation.`
     let response = await providerAI(
       () => this.anthropic.messages.create({
         model: ClaudeOrchestratorService.MODEL,
-        max_tokens: 1024,
+        max_tokens: ClaudeOrchestratorService.MAX_TOKENS,
         system: systemMsg,
         messages,
         tools,
@@ -391,8 +414,17 @@ Do NOT reach back to earlier conversation turns when processing a confirmation.`
     );
 
     let assistantText = '';
+    let iterations = 0;
+    let hitToolCap = false;
 
     while (response.stop_reason === 'tool_use') {
+      if (++iterations > ClaudeOrchestratorService.MAX_TOOL_ITERATIONS) {
+        this.logger.error(
+          `[${correlationId ?? sessionId}] tool loop hit the ${ClaudeOrchestratorService.MAX_TOOL_ITERATIONS}-iteration cap — stopping`,
+        );
+        hitToolCap = true;
+        break;
+      }
       const textBlocks = response.content.filter(
         (b): b is Anthropic.Messages.TextBlock => b.type === 'text',
       );
@@ -428,7 +460,7 @@ Do NOT reach back to earlier conversation turns when processing a confirmation.`
       response = await providerAI(
         () => this.anthropic.messages.create({
           model: ClaudeOrchestratorService.MODEL,
-          max_tokens: 1024,
+          max_tokens: ClaudeOrchestratorService.MAX_TOKENS,
           system: systemMsg,
           messages,
           tools,
@@ -440,9 +472,24 @@ Do NOT reach back to earlier conversation turns when processing a confirmation.`
     const finalTextBlocks = response.content.filter(
       (b): b is Anthropic.Messages.TextBlock => b.type === 'text',
     );
-    const finalResponse = finalTextBlocks.length > 0
+    let finalResponse = finalTextBlocks.length > 0
       ? finalTextBlocks.map(b => b.text).join(' ').trim()
       : assistantText.trim() || 'I apologize, I could not generate a response.';
+
+    if (hitToolCap) {
+      // Say so plainly rather than returning a half-finished thought that looks
+      // like a complete answer.
+      finalResponse =
+        `${finalResponse}\n\n(I stopped after ${ClaudeOrchestratorService.MAX_TOOL_ITERATIONS} ` +
+        `tool steps on this request without finishing — something looks stuck. ` +
+        `Try narrowing what you asked for.)`.trim();
+    } else if (response.stop_reason === 'max_tokens') {
+      // Truncation used to be invisible: the reply just stopped mid-sentence.
+      this.logger.warn(
+        `[${correlationId ?? sessionId}] response truncated at max_tokens=${ClaudeOrchestratorService.MAX_TOKENS}`,
+      );
+      finalResponse = `${finalResponse}\n\n(…response was cut short. Ask me to continue.)`;
+    }
 
     const newMessages: MessageParam[] = [
       ...messages.slice(historyLen),
@@ -498,7 +545,7 @@ Do NOT reach back to earlier conversation turns when processing a confirmation.`
     let response = await providerAI(
       () => this.anthropic.messages.create({
         model: ClaudeOrchestratorService.MODEL,
-        max_tokens: 1024,
+        max_tokens: ClaudeOrchestratorService.MAX_TOKENS,
         system: systemMsg,
         messages,
         tools,
@@ -506,7 +553,15 @@ Do NOT reach back to earlier conversation turns when processing a confirmation.`
       'anthropic.messages.create',
     );
 
+    let iterations = 0;
+
     while (response.stop_reason === 'tool_use') {
+      if (++iterations > ClaudeOrchestratorService.MAX_TOOL_ITERATIONS) {
+        this.logger.error(
+          `[stream:${correlationId ?? sessionId}] tool loop hit the ${ClaudeOrchestratorService.MAX_TOOL_ITERATIONS}-iteration cap — stopping`,
+        );
+        break;
+      }
       const toolUseBlocks = response.content.filter(
         (b): b is Anthropic.Messages.ToolUseBlock => b.type === 'tool_use',
       );
@@ -536,7 +591,7 @@ Do NOT reach back to earlier conversation turns when processing a confirmation.`
       response = await providerAI(
         () => this.anthropic.messages.create({
           model: ClaudeOrchestratorService.MODEL,
-          max_tokens: 1024,
+          max_tokens: ClaudeOrchestratorService.MAX_TOKENS,
           system: systemMsg,
           messages,
           tools,
@@ -551,7 +606,7 @@ Do NOT reach back to earlier conversation turns when processing a confirmation.`
     try {
       const stream = this.anthropic.messages.stream({
         model: ClaudeOrchestratorService.MODEL,
-        max_tokens: 1024,
+        max_tokens: ClaudeOrchestratorService.MAX_TOKENS,
         system: systemMsg,
         messages,
         tools,

@@ -92,6 +92,58 @@ export class ConversationMemoryService {
     let msgs = [...messages];
     let changed = false;
 
+    // ── Phase 0: Drop tool_results whose tool_use was cut off ─────────────
+    //
+    // ROOT-CAUSE FIX. loadHistory() takes the NEWEST `limit` rows, so the window
+    // can begin in the middle of a tool exchange: the assistant message holding
+    // the tool_use blocks falls outside the window while the user message
+    // holding the matching tool_results falls inside it. Anthropic then rejects
+    // the whole request with
+    //   400 "unexpected tool_use_id found in tool_result blocks".
+    //
+    // Phases 1 and 2 below only inspect the TAIL, so this leading orphan slipped
+    // through every time. The 400 was being "handled" upstream by wiping the
+    // entire conversation and retrying (see VoiceOrchestratorService) — the user
+    // silently lost their history to a bug that was fixable here.
+    //
+    // Walk forward tracking every tool_use id seen so far; drop any user message
+    // whose tool_results reference an id we never saw.
+    {
+      const seenToolUseIds = new Set<string>();
+      const kept: MessageParam[] = [];
+
+      for (const msg of msgs) {
+        const content = Array.isArray(msg.content) ? msg.content : [];
+
+        if (msg.role === 'assistant') {
+          for (const b of content as any[]) {
+            if (b.type === 'tool_use' && b.id) seenToolUseIds.add(b.id);
+          }
+          kept.push(msg);
+          continue;
+        }
+
+        const toolResults = (content as any[]).filter(b => b.type === 'tool_result');
+        if (toolResults.length === 0) {
+          kept.push(msg);
+          continue;
+        }
+
+        const allMatched = toolResults.every(b => seenToolUseIds.has(b.tool_use_id));
+        if (allMatched) {
+          kept.push(msg);
+        } else {
+          this.logger.warn(
+            `[${sessionId}] Dropping tool_result message with no in-window tool_use ` +
+            `(history window started mid-tool-exchange)`,
+          );
+          changed = true;
+        }
+      }
+
+      msgs = kept;
+    }
+
     // ── Phase 1: Forward pass across all message pairs ────────────────────
     // An assistant message with tool_use blocks MUST be immediately followed
     // by a user message with matching tool_result blocks. If not, truncate

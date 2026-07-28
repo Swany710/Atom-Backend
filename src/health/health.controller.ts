@@ -5,6 +5,7 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { Response } from 'express';
 import { Public } from '../decorators/public.decorator';
+import { checkCapabilities } from '../config/env.validation';
 
 /**
  * Liveness  — GET /health          → always 200 while the process is alive
@@ -37,15 +38,27 @@ export class HealthController {
     };
   }
 
-  /** Readiness: is the database reachable? Returns 200 or 503. */
+  /**
+   * Readiness: is the database reachable? Returns 200 or 503.
+   *
+   * Also reports which AI/voice features are configured. Missing AI keys do NOT
+   * fail readiness — the service is still able to serve traffic — but they are
+   * listed so "why did voice stop working?" is answerable from a single curl
+   * instead of a container log dig.
+   */
   @Public()
   @Get('ready')
   async readiness(@Res() res: Response): Promise<void> {
+    const capabilities = checkCapabilities();
+    const degraded = capabilities.filter((c) => !c.ok).map((c) => c.detail);
+
     try {
       await this.dataSource.query('SELECT 1');
       res.status(HttpStatus.OK).json({
-        status: 'ok',
+        status: degraded.length ? 'degraded' : 'ok',
         db: 'connected',
+        capabilities: Object.fromEntries(capabilities.map((c) => [c.feature, c.ok])),
+        ...(degraded.length ? { missing: degraded } : {}),
         timestamp: new Date().toISOString(),
       });
     } catch (err) {

@@ -18,6 +18,62 @@ const REQUIRED_PROD_VARS: string[] = [
   'OWNER_USER_ID',
 ];
 
+/**
+ * Capability vars. These are deliberately NOT in REQUIRED_PROD_VARS — a missing
+ * one degrades a feature rather than making the service unbootable, and hard-
+ * failing the deploy would be worse than running without (say) live voice.
+ *
+ * They ARE reported loudly at boot, because the previous behaviour was silence:
+ * the container came up "healthy", and the first person to press the mic got a
+ * 500 with no clue that a key was simply absent.
+ */
+interface CapabilityCheck {
+  feature: string;
+  ok: boolean;
+  detail: string;
+}
+
+export function checkCapabilities(): CapabilityCheck[] {
+  const has = (k: string) => !!process.env[k]?.trim();
+
+  return [
+    {
+      feature: 'AI reasoning + tool use (all text and voice replies)',
+      ok: has('ANTHROPIC_API_KEY'),
+      detail: 'set ANTHROPIC_API_KEY',
+    },
+    {
+      feature: 'Speech-to-text + spoken replies (POST /api/v1/ai/voice, /speak)',
+      ok: has('ELEVENLABS_API_KEY'),
+      detail: 'set ELEVENLABS_API_KEY — ElevenLabs is the only speech provider',
+    },
+    {
+      feature: 'Knowledge-base semantic search (product spec library embeddings)',
+      ok: has('OPENAI_API_KEY'),
+      detail: 'set OPENAI_API_KEY — used ONLY for text-embedding-3-small',
+    },
+  ];
+}
+
+/** Print a one-line-per-feature capability report. Never exits the process. */
+export function reportCapabilities(): void {
+  const checks = checkCapabilities();
+  const broken = checks.filter((c) => !c.ok);
+
+  if (broken.length === 0) {
+    console.log('✅ AI capability check passed — reasoning, voice I/O, and live voice all configured.');
+    return;
+  }
+
+  console.warn('⚠️  AI capability check — the following features are DISABLED:');
+  for (const c of broken) {
+    console.warn(`   ✗ ${c.feature}\n       → ${c.detail}`);
+  }
+  console.warn(
+    '   The service will still start, but requests that need these features will fail at runtime.',
+  );
+}
+
 function parseUrl(value: string): URL | undefined {
   try {
     return new URL(value);

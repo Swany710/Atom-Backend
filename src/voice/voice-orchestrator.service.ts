@@ -102,12 +102,23 @@ export class VoiceOrchestratorService {
 
   // -- Voice pipeline (standard) -------------------------------------------
 
+  /**
+   * @param options.synthesise  Generate the spoken reply (default true).
+   *
+   *   Set false when the caller only wants text. Previously TTS ran on EVERY
+   *   voice request, and the JSON response path then DISCARDED the audio — while
+   *   the browser turned around and called /ai/speak to synthesise the very same
+   *   sentence again. That was two ElevenLabs TTS generations billed per spoken
+   *   turn, one of which was never heard.
+   */
   async processVoiceCommand(
     audioBuffer: Buffer,
     userId: string,
     conversationId?: string,
     mimeType?: string,
+    options?: { synthesise?: boolean },
   ): Promise<ProcessResult> {
+    const wantAudio = options?.synthesise !== false;
     const sessionId = conversationId ?? userId;
     const fullStart = Date.now();
 
@@ -129,11 +140,18 @@ export class VoiceOrchestratorService {
 
     await this.memory.appendMessages(sessionId, newMessages);
 
-    // Step 3 — TTS: reply → audio/mpeg (OpenAI TTS)
+    // Step 3 — TTS: reply → audio/mpeg (ElevenLabs). Skipped when the caller
+    // only wants text, so we don't pay for audio nobody will hear.
     const ttsStart = Date.now();
-    const audioResponse = await this.transcription.synthesise(reply);
+    const audioResponse = wantAudio
+      ? await this.transcription.synthesise(reply)
+      : undefined;
     const ttsMs = Date.now() - ttsStart;
-    this.logger.log(`[LATENCY] TTS: ${ttsMs}ms | session=${sessionId}`);
+    this.logger.log(
+      wantAudio
+        ? `[LATENCY] TTS: ${ttsMs}ms | session=${sessionId}`
+        : `[LATENCY] TTS: skipped (text-only request) | session=${sessionId}`,
+    );
 
     const fullMs = Date.now() - fullStart;
     this.logger.log(
@@ -202,9 +220,23 @@ export class VoiceOrchestratorService {
 
     // Consume the async generator — tool-use turns are handled non-streaming
     // inside streamChat; only the final text turn is streamed token-by-token.
+    //
+    // Driven with .next() rather than `for await` on purpose: a for-await loop
+    // THROWS AWAY a generator's return value, and streamChat returns the full
+    // newMessages set (assistant tool_use + user tool_result pairs). The old
+    // loop discarded it and persisted only a bare user/assistant pair, so every
+    // tool call made through the fast path vanished from history and Atom lost
+    // the context of what it had just done.
     const chatStream = this.orchestrator.streamChat(sessionId, transcribed, userId);
+    let streamResult: Awaited<ReturnType<typeof this.orchestrator.runChat>> | undefined;
 
-    for await (const chunk of chatStream) {
+    for (;;) {
+      const step = await chatStream.next();
+      if (step.done) {
+        streamResult = step.value;
+        break;
+      }
+      const chunk = step.value;
       fullResponse   += chunk;
       sentenceBuffer += chunk;
 
@@ -249,11 +281,19 @@ export class VoiceOrchestratorService {
       ? Buffer.concat(validChunks)
       : undefined;
 
-    // Persist conversation (user + assistant pair; tool pairs handled inside streamChat)
-    await this.memory.appendMessages(sessionId, [
-      { role: 'user',      content: transcribed  },
-      { role: 'assistant', content: fullResponse },
-    ]);
+    // Persist the FULL turn returned by streamChat — user message, every
+    // assistant tool_use block and its matching tool_result, then the final
+    // assistant text. Falling back to the bare pair only if the generator
+    // returned nothing (it always should).
+    await this.memory.appendMessages(
+      sessionId,
+      streamResult?.newMessages?.length
+        ? streamResult.newMessages
+        : [
+            { role: 'user',      content: transcribed  },
+            { role: 'assistant', content: fullResponse },
+          ],
+    );
 
     const fullMs = Date.now() - fullStart;
     this.logger.log(

@@ -9,24 +9,28 @@ const FormData = require('form-data');
 /**
  * ElevenLabsTranscriptionService
  *
- * ElevenLabs is used EXCLUSIVELY for audio I/O (replaces OpenAI Whisper/TTS —
- * see openai-transcription.service.ts, retained for easy rollback):
+ * ElevenLabs is used EXCLUSIVELY for audio I/O:
  *   - Speech-to-Text  :  audio buffer → transcription string  (Scribe)
  *   - Text-to-Speech  :  text string  → audio/mpeg buffer     (ElevenLabs TTS)
  *
  * ElevenLabs is NOT used for reasoning, tool selection, or orchestration —
  * all decision-making flows through ClaudeOrchestratorService.
  *
+ * PROVIDER POLICY (deliberate — do not "helpfully" add a fallback):
+ *   ElevenLabs is the ONLY speech provider. OpenAI is scoped to embeddings
+ *   (text-embedding-3-small, see KnowledgeBaseService) and nothing else.
+ *   If ElevenLabs is down, voice is down — that is the intended behaviour, not
+ *   a gap to be patched by routing audio to another vendor.
+ *
  * Env vars:
- *   ELEVENLABS_API_KEY    (required)
+ *   ELEVENLABS_API_KEY    (required — without it, voice I/O is unavailable)
  *   ELEVENLABS_VOICE_ID   (optional — overrides the voice-name mapping)
  *   ELEVENLABS_TTS_MODEL  (optional — default eleven_turbo_v2_5)
  *   ELEVENLABS_STT_MODEL  (optional — default scribe_v1)
  *
- * The public method signatures are IDENTICAL to OpenAiTranscriptionService,
- * including the OpenAI voice names ('alloy'…'shimmer') still sent by the
- * frontend — they are mapped to comparable ElevenLabs premade voices below,
- * so no caller (voice pipeline, controller, frontend) needs to change.
+ * The frontend still sends OpenAI-style voice names ('alloy'…'shimmer'); they
+ * are mapped to comparable ElevenLabs premade voices below, so no caller
+ * (voice pipeline, controller, frontend) needs to change.
  */
 
 /** OpenAI voice name → comparable ElevenLabs premade voice ID. */
@@ -54,13 +58,33 @@ export class ElevenLabsTranscriptionService {
     this.ttsModel      = this.config.get<string>('ELEVENLABS_TTS_MODEL') || 'eleven_turbo_v2_5';
     this.sttModel      = this.config.get<string>('ELEVENLABS_STT_MODEL') || 'scribe_v1';
     this.voiceOverride = this.config.get<string>('ELEVENLABS_VOICE_ID') || undefined;
+
     if (!this.apiKey) {
-      this.logger.warn('ELEVENLABS_API_KEY not set — voice features disabled');
+      // Escalated from warn to error: this single missing variable takes out
+      // BOTH voice input and every spoken reply, and it used to surface only as
+      // an opaque HTTP 500 the first time someone pressed the mic.
+      this.logger.error(
+        'ELEVENLABS_API_KEY not set — speech-to-text and text-to-speech are DISABLED. ' +
+        'Voice requests will fail until it is configured.',
+      );
     }
+  }
+
+  /** True when speech I/O is usable. Surfaced by /health/ready. */
+  get isConfigured(): boolean {
+    return !!this.apiKey;
   }
 
   private voiceIdFor(voice?: string): string {
     return this.voiceOverride ?? VOICE_MAP[voice ?? 'nova'] ?? DEFAULT_VOICE_ID;
+  }
+
+  private static extFor(mimeType?: string): string {
+    return mimeType?.includes('webm') ? '.webm'
+         : mimeType?.includes('ogg')  ? '.ogg'
+         : mimeType?.includes('wav')  ? '.wav'
+         : mimeType?.includes('mp4')  ? '.mp4'
+         : '.mp3';
   }
 
   // ── STT — Speech-to-Text (ElevenLabs Scribe) ─────────────────────────────
@@ -71,12 +95,7 @@ export class ElevenLabsTranscriptionService {
    */
   async transcribe(audioBuffer: Buffer, mimeType?: string): Promise<string> {
     if (!this.apiKey) throw new Error('ELEVENLABS_API_KEY not configured');
-
-    const ext = mimeType?.includes('webm') ? '.webm'
-              : mimeType?.includes('ogg')  ? '.ogg'
-              : mimeType?.includes('wav')  ? '.wav'
-              : mimeType?.includes('mp4')  ? '.mp4'
-              : '.mp3';
+    const ext = ElevenLabsTranscriptionService.extFor(mimeType);
 
     const form = new FormData();
     form.append('model_id', this.sttModel);

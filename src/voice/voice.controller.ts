@@ -65,10 +65,18 @@ interface MulterFile {
  *   POST   /api/v1/ai/voice            — requires auth
  *   POST   /api/v1/ai/voice-command    — requires auth (legacy — backwards compat)
  *   POST   /api/v1/ai/speak            — requires auth
- *   POST   /api/v1/ai/sync-turn        — requires auth
- *   POST   /api/v1/ai/realtime-token   — requires auth
  *   GET    /api/v1/ai/conversations/:id  — requires auth
  *   DELETE /api/v1/ai/conversations/:id  — requires auth
+ *
+ * Voice pipeline: ElevenLabs Scribe (STT) → Claude with the full tool set →
+ * ElevenLabs (TTS). OpenAI is not involved; it is scoped to knowledge-base
+ * embeddings only.
+ *
+ * Removed 2026-07-28: POST /ai/realtime-token and POST /ai/sync-turn. Both
+ * existed solely for the OpenAI Realtime live-voice mode, which answered with
+ * OpenAI instead of Claude and therefore ran with no tools, no pending-action
+ * confirmations, and no UPPA guardrail. Live voice now uses POST /ai/voice like
+ * every other spoken turn.
  */
 @ApiTags('AI')
 @Controller('api/v1/ai')
@@ -158,19 +166,24 @@ export class VoiceController {
       return;
     }
 
+    const wantAudio = returnAudio === 'true';
+
     try {
       const result = await this.voiceService.processVoiceCommand(
         file.buffer,
         userId,
         conversationId,
         file.mimetype,
+        // Only synthesise when the caller will actually play the bytes. The
+        // JSON path used to discard a freshly-generated MP3 on every request.
+        { synthesise: wantAudio },
       );
 
       res.setHeader('X-Transcription',   this.safeHeader(result.transcription ?? ''));
       res.setHeader('X-Response-Text',   this.safeHeader(result.response ?? ''));
       res.setHeader('X-Conversation-Id', this.safeHeader(result.conversationId ?? ''));
 
-      if (returnAudio === 'true' && result.audioResponse) {
+      if (wantAudio && result.audioResponse) {
         res.setHeader('Content-Type', 'audio/mpeg');
         res.send(result.audioResponse);
         return;
@@ -255,34 +268,6 @@ export class VoiceController {
     }
   }
 
-  // ── Sync realtime voice turn to backend session memory ────────────────────
-  //
-  // Called by the frontend after each OpenAI Realtime turn completes so that
-  // switching from voice to text carries the full conversation context.
-  // This is fire-and-forget from the frontend's perspective (errors are logged
-  // but don't interrupt the voice session).
-
-  @Post('sync-turn')
-  async syncRealtimeTurn(
-    @Body() body: { userMessage?: string; assistantMessage?: string; conversationId?: string },
-    @Req() req: any,
-  ): Promise<{ conversationId: string }> {
-    const userId    = this.userId(req);
-    const sessionId = body.conversationId ?? userId;
-
-    const msgs: Array<{ role: 'user' | 'assistant'; content: string }> = [];
-    if (body.userMessage?.trim())
-      msgs.push({ role: 'user',      content: body.userMessage.trim() });
-    if (body.assistantMessage?.trim())
-      msgs.push({ role: 'assistant', content: body.assistantMessage.trim() });
-
-    if (msgs.length) {
-      await this.memory.appendMessages(sessionId, msgs as any);
-    }
-
-    return { conversationId: sessionId };
-  }
-
   // ── Conversation history ──────────────────────────────────────────────────
   //
   // Ownership rule: a session ID is always either:
@@ -312,64 +297,4 @@ export class VoiceController {
     await this.memory.clearSession(id);
     return { message: 'Conversation cleared', conversationId: id };
   }
-
-  // ── OpenAI Realtime ephemeral token ───────────────────────────────────────
-  // Frontend requests a short-lived token so the OpenAI API key never
-  // leaves the server. Token is valid for 60 seconds.
-
-  @Post('realtime-token')
-  async getRealtimeToken(@Req() req: any) {
-    const openaiKey = process.env.OPENAI_API_KEY;
-    if (!openaiKey) {
-      throw new HttpException('OPENAI_API_KEY not configured', HttpStatus.SERVICE_UNAVAILABLE);
-    }
-
-    const today = new Date().toLocaleDateString('en-US', {
-      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
-    });
-    const systemPrompt = [
-      'You are Atom, an AI personal assistant for a roofing and contracting business.',
-      'You are proactive, organized, and operate like a world-class executive assistant.',
-      `Today is ${today}.`,
-      'Keep responses concise and natural for voice conversation. Speak clearly and directly.',
-    ].join(' ');
-
-    try {
-      const response = await fetch('https://api.openai.com/v1/realtime/sessions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${openaiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'gpt-4o-realtime-preview-2024-12-17',
-          voice: 'alloy',
-          instructions: systemPrompt,
-          input_audio_transcription: { model: 'whisper-1' },
-          turn_detection: {
-            type: 'server_vad',
-            threshold: 0.8,           // higher = won't trigger on Atom's own audio output
-            prefix_padding_ms: 300,
-            silence_duration_ms: 800, // wait longer so user isn't cut off mid-sentence
-          },
-        }),
-      });
-
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new HttpException(`OpenAI error: ${errText}`, HttpStatus.BAD_GATEWAY);
-      }
-
-      const session = await response.json() as any;
-      return {
-        clientSecret: session.client_secret?.value ?? session.client_secret,
-        sessionId:    session.id,
-        expiresAt:    session.expires_at,
-      };
-    } catch (err: any) {
-      if (err instanceof HttpException) throw err;
-      throw new HttpException(err.message, HttpStatus.INTERNAL_SERVER_ERROR);
-    }
-  }
-
 }

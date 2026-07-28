@@ -1,7 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
-import { validateProductionEnv } from './config/env.validation';
+import { validateProductionEnv, reportCapabilities } from './config/env.validation';
 import { GlobalExceptionFilter } from './filters/global-exception.filter';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
@@ -12,6 +12,10 @@ import { static as serveStatic } from 'express';
 // ── Run before anything else ──────────────────────────────────────────────
 // Exits the process immediately if required production env vars are missing.
 validateProductionEnv();
+
+// Non-fatal: reports which AI/voice features are usable with the current env.
+// A missing key here degrades a feature; it does not stop the service.
+reportCapabilities();
 
 // ── Fatal signal handlers ──────────────────────────────────────────────────
 process.on('unhandledRejection', (reason: unknown) => {
