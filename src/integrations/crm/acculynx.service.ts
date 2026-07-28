@@ -398,6 +398,89 @@ export class AccuLynxService {
     }
   }
 
+  // ── Job contact lookup + email logging ───────────────────────────────────
+  //
+  // AccuLynx has NO API to send email. Verified 2026-07-28 against the full v2
+  // endpoint index: there is no send-mail endpoint anywhere, and both
+  // POST /jobs/{id}/messages and .../messages/{id}/replies state that "the
+  // message will only be created as a comment". There is also no GET for job
+  // messages, so the thread cannot be read back.
+  //
+  // So mail goes out through the user's own connected mailbox (Gmail/Outlook)
+  // and we post a record of it onto the job file, which is what puts the
+  // correspondence in front of whoever opens the job next.
+
+  /**
+   * Primary contact on a job, with contact details resolved.
+   * Returns emails/phones as flat string arrays.
+   */
+  async getJobPrimaryContact(jobId: string): Promise<CrmResult<{
+    contactId: string;
+    name:      string;
+    emails:    string[];
+    phones:    string[];
+  }>> {
+    const { client } = await this.getClient();
+    if (!client) return this.notConfigured();
+    try {
+      const contactId = await this.getJobPrimaryContactId(client, jobId);
+      if (!contactId) {
+        return { success: false, error: 'No contact is attached to this job in AccuLynx.' };
+      }
+
+      const contact = (await client.get(`/contacts/${contactId}`, {
+        params: { includes: 'emailAddress,phoneNumber' },
+      })).data ?? {};
+
+      const emails: string[] = (contact.emailAddresses ?? [])
+        .map((e: any) => e.address ?? e)
+        .filter((e: any) => typeof e === 'string' && e.includes('@'));
+      if (!emails.length && typeof contact.email === 'string') emails.push(contact.email);
+
+      const phones: string[] = (contact.phoneNumbers ?? [])
+        .map((p: any) => p.number ?? p)
+        .filter((p: any) => typeof p === 'string');
+
+      const name = [contact.firstName, contact.lastName].filter(Boolean).join(' ')
+        || contact.companyName
+        || contact.fullName
+        || 'Unknown contact';
+
+      return { success: true, data: { contactId, name, emails, phones } };
+    } catch (err: any) {
+      this.logger.error('getJobPrimaryContact error:', err.response?.data ?? err.message);
+      return {
+        success: false,
+        error: err.response?.data?.title ?? err.response?.data?.message ?? err.message,
+      };
+    }
+  }
+
+  /**
+   * Record an email that was sent (via the user's mailbox) on the job file.
+   *
+   * This is a job comment, not a delivered message — AccuLynx cannot send mail.
+   * The wording below is deliberate: it must be obvious to anyone reading the
+   * job that this is a LOG of a sent email, not an email AccuLynx delivered.
+   */
+  async logEmailOnJob(jobId: string, email: {
+    to:       string[];
+    subject:  string;
+    body:     string;
+    cc?:      string[];
+    sentBy?:  string;
+  }): Promise<CrmResult> {
+    const lines = [
+      `EMAIL SENT${email.sentBy ? ` by ${email.sentBy}` : ''} — ${new Date().toISOString()}`,
+      `To: ${email.to.join(', ')}`,
+      ...(email.cc?.length ? [`Cc: ${email.cc.join(', ')}`] : []),
+      `Subject: ${email.subject}`,
+      '',
+      email.body,
+    ];
+    return this.addNote(jobId, lines.join('\n'), 'Atom AI');
+  }
+
   // ── Contacts ─────────────────────────────────────────────────────────────
 
   async getContacts(params?: {

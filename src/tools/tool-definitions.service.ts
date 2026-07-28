@@ -274,6 +274,65 @@ export class ToolDefinitionsService {
         },
       },
       {
+        name: 'crm_email_job_contact',
+        description:
+          "Email the homeowner/primary contact on an AccuLynx job, and log the sent " +
+          "email onto that job's file. REQUIRE confirmation before calling.\n" +
+          "\n" +
+          "Use this instead of send_email whenever the message is about a specific job, " +
+          "so the correspondence lands on the job file where the crew and office can see " +
+          "it. Leave `to` empty and Atom looks up the contact's address from AccuLynx; " +
+          "pass `to` only to override it. The email goes out through the user's own " +
+          "connected mailbox — AccuLynx has no send-mail API, so the job entry is a " +
+          "record of the sent email, not a message AccuLynx delivered. Say it that way " +
+          "to the user; never imply AccuLynx sent it.\n" +
+          "\n" +
+          "UPPA — HARD LIMIT ON WHAT THIS MAY SAY. The user is a CONTRACTOR, not a " +
+          "licensed public adjuster. DO NOT use this tool to send a homeowner (or anyone " +
+          "on their behalf) content that: negotiates or disputes a claim; argues what the " +
+          "policy covers or should cover; demands or justifies approval of a supplement or " +
+          "reinspection; interprets policy language, endorsements, or exclusions; advises " +
+          "whether to accept, reject, or appeal a settlement; or presents the company as " +
+          "representing the homeowner to their carrier. If the user asks for any of that, " +
+          "REFUSE that part, say plainly that it may violate UPPA rules for contractors, " +
+          "and suggest the homeowner speak with their insurer or a licensed public adjuster " +
+          "directly. Then offer to send the parts that are fine.\n" +
+          "\n" +
+          "ALWAYS FINE: scheduling and confirming appointments, crew arrival windows, " +
+          "material and colour selections, work progress and completion updates, requesting " +
+          "documents or signatures, warranty and workmanship info, invoices and payment for " +
+          "the contractor's own work, and factual descriptions of observed damage.",
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            jobId:   { type: 'string', description: 'AccuLynx job ID' },
+            subject: { type: 'string', description: 'Subject line' },
+            body:    { type: 'string', description: 'Email body (plain text)' },
+            to: {
+              type: 'array',
+              items: { type: 'string' },
+              description:
+                "Override recipients. Omit to use the job's primary contact email from AccuLynx.",
+            },
+            cc:        { type: 'array', items: { type: 'string' } },
+            draftOnly: {
+              type: 'boolean',
+              description:
+                'Save the email as a draft instead of sending. The job file is NOT written ' +
+                'when true — nothing was sent yet.',
+            },
+            skipJobLog: {
+              type: 'boolean',
+              description:
+                'Send without recording it on the job file. Default false; only set when ' +
+                'the user explicitly asks to keep it off the job.',
+            },
+            pendingActionId: { type: 'string', description: 'ID from pending action confirmation' },
+          },
+          required: ['jobId', 'subject', 'body'],
+        },
+      },
+      {
         name: 'crm_create_lead',
         description:
           'Create a new lead/job in AccuLynx. REQUIRE confirmation before calling. ' +
@@ -629,6 +688,7 @@ export class ToolDefinitionsService {
     'update_calendar_event',
     'delete_calendar_event',
     'crm_add_note',
+    'crm_email_job_contact',
     'crm_create_lead',
     'crm_update_job_details',
     'crm_update_insurance',

@@ -353,6 +353,130 @@ export class ToolExecutionService {
         );
       }
 
+      case 'crm_email_job_contact': {
+        // CRM-ACCESS-POLICY: members can only touch their assigned jobs
+        const denied = await this.crmPolicy.checkJobAccess(args.jobId as string);
+        if (denied) return denied;
+
+        const jobId     = args.jobId as string;
+        const subject   = args.subject as string;
+        const body      = args.body as string;
+        const cc        = args.cc as string[] | undefined;
+        const draftOnly = (args.draftOnly as boolean) || false;
+
+        // ── Resolve recipients ────────────────────────────────────────────
+        // Explicit `to` wins; otherwise pull the job's primary contact from
+        // AccuLynx so the user doesn't have to know the address.
+        let to = (args.to as string[] | undefined)?.filter(Boolean) ?? [];
+        let contactName: string | undefined;
+
+        if (!to.length) {
+          const contact = await this.accuLynx.getJobPrimaryContact(jobId);
+          if (!contact.success) {
+            return {
+              success: false,
+              error: `Could not look up the job's contact: ${contact.error}. ` +
+                     'Pass "to" explicitly, or add an email to the contact in AccuLynx.',
+            };
+          }
+          if (!contact.data?.emails.length) {
+            return {
+              success: false,
+              error: `${contact.data?.name ?? 'The job contact'} has no email address on file ` +
+                     'in AccuLynx. Add one to the contact, or pass "to" explicitly. ' +
+                     'Nothing was sent.',
+            };
+          }
+          to = [contact.data.emails[0]];
+          contactName = contact.data.name;
+        }
+
+        // ── Send through the user's own mailbox ───────────────────────────
+        // AccuLynx cannot send mail (see AccuLynxService.logEmailOnJob).
+        // Split by provider rather than a ternary: the two transports have
+        // different return types, so a ternary widens them into a union.
+        const provider = await this.userEmailProvider(userId);
+        const sent: unknown = provider === 'outlook'
+          ? await providerWrite(
+              () => this.emailRouter.sendEmail(
+                to, subject, body, draftOnly, cc, undefined, undefined, userId, 'outlook',
+              ),
+              'outlook.sendEmail',
+            )
+          : await providerWrite(
+              () => this.emailService.sendEmail(
+                to, subject, body, draftOnly, cc, undefined, undefined, userId,
+              ),
+              'gmail.sendEmail',
+            );
+
+        // Never write "email sent" on the job file if the send failed.
+        const sendFailed =
+          sent && typeof sent === 'object' && 'success' in (sent as any) &&
+          (sent as any).success === false;
+        if (sendFailed) {
+          return {
+            success: false,
+            error: `Email was NOT sent: ${(sent as any).error ?? 'unknown error'}. ` +
+                   'Nothing was written to the job file.',
+            recipients: to,
+          };
+        }
+
+        // A draft isn't correspondence yet — logging it would put a record of
+        // an email on the job that nobody ever received.
+        if (draftOnly) {
+          return {
+            success: true,
+            drafted: true,
+            recipients: to,
+            contactName,
+            jobLogged: false,
+            message: `Draft saved (not sent) for ${to.join(', ')}. ` +
+                     'Nothing was written to the job file — drafts are not correspondence.',
+          };
+        }
+
+        // ── Log it on the job file ────────────────────────────────────────
+        if (args.skipJobLog as boolean) {
+          return {
+            success: true,
+            recipients: to,
+            contactName,
+            jobLogged: false,
+            message: `Email sent to ${to.join(', ')}. Not recorded on the job (skipJobLog).`,
+          };
+        }
+
+        const logged = await this.accuLynx.logEmailOnJob(jobId, {
+          to, subject, body, cc, sentBy: userId,
+        });
+
+        // Partial success is real here and must be reported honestly: the
+        // homeowner HAS the email even if the job file write failed.
+        if (!logged.success) {
+          return {
+            success: true,
+            recipients: to,
+            contactName,
+            jobLogged: false,
+            jobLogError: logged.error,
+            message:
+              `Email SENT to ${to.join(', ')} — but it could NOT be recorded on the job file ` +
+              `(${logged.error}). The homeowner has the email; the job file does not show it. ` +
+              'Add it manually in AccuLynx if you need the paper trail.',
+          };
+        }
+
+        return {
+          success: true,
+          recipients: to,
+          contactName,
+          jobLogged: true,
+          message: `Email sent to ${to.join(', ')} and recorded on the job file.`,
+        };
+      }
+
       case 'crm_create_lead': {
         const denied = await this.crmPolicy.checkCrmAccess();
         if (denied) return denied;
@@ -868,6 +992,20 @@ export class ToolExecutionService {
         return `Delete calendar event ${args.eventId}`;
       case 'crm_add_note':
         return `Add note to CRM job ${args.jobId}`;
+      case 'crm_email_job_contact': {
+        // The user is about to send mail to a homeowner — show them the actual
+        // recipient and the full body, not a one-liner. This summary is the
+        // last thing standing between a draft and a customer's inbox.
+        const recips = (args.to as string[] | undefined)?.length
+          ? (args.to as string[]).join(', ')
+          : "the job's primary contact (looked up from AccuLynx)";
+        const verb = args.draftOnly ? 'Draft (do NOT send)' : 'Send';
+        const log  = args.draftOnly ? ''
+                   : args.skipJobLog ? ' — will NOT be recorded on the job file'
+                   : ' — and record it on the job file';
+        return `${verb} an email to ${recips} on job ${args.jobId}${log}\n` +
+               `Subject: ${args.subject}\n\n${args.body}`;
+      }
       case 'crm_create_lead':
         return `Create CRM lead for ${args.firstName} ${args.lastName}` +
           (args.claimNumber || args.dateOfLoss || args.insuranceCompanyName
