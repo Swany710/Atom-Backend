@@ -75,6 +75,8 @@ function makeDeps(over: Record<string, any> = {}) {
     noop as any,            // emailRouter
     noop as any,            // outlookTransport
     noop as any,            // outlookCalendar
+    noop as any,            // contacts
+    noop as any,            // directory
   );
 
   // Resolve which mailbox the router would pick — default gmail.

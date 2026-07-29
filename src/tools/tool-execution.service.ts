@@ -15,6 +15,8 @@ import { PendingActionService, ConfirmationRequired } from '../pending-actions/p
 import { AuditService } from '../audit/audit.service';
 import { providerRead, providerWrite } from '../utils/provider-call';
 import { ScheduledTaskService } from '../scheduled-tasks/scheduled-task.service';
+import { ContactsService } from '../contacts/contacts.service';
+import { DirectorySearchService } from '../contacts/directory-search.service';
 
 /**
  * ToolExecutionService
@@ -66,6 +68,11 @@ export class ToolExecutionService {
     private readonly emailRouter: EmailRouterService,
     private readonly outlookTransport: OutlookTransport,
     private readonly outlookCalendar: OutlookCalendarService,
+    // Atom's own address book, and read-only search of the user's mailbox
+    // contacts. Appended at the end so existing positional construction in the
+    // specs keeps working.
+    private readonly contacts: ContactsService,
+    private readonly directory: DirectorySearchService,
   ) {}
 
   /**
@@ -530,6 +537,29 @@ export class ToolExecutionService {
           'notes.delete',
         );
 
+      // ── Address book ────────────────────────────────────────────────────
+      case 'create_contact': {
+        const { pendingActionId, allowDuplicate, ...input } = args as any;
+        return providerWrite(
+          () => this.contacts.create(userId, input, { allowDuplicate: !!allowDuplicate }),
+          'contacts.create',
+        );
+      }
+
+      case 'update_contact': {
+        const { pendingActionId, id, ...input } = args as any;
+        return providerWrite(
+          () => this.contacts.update(userId, id as string, input),
+          'contacts.update',
+        );
+      }
+
+      case 'delete_contact':
+        return providerWrite(
+          () => this.contacts.remove(userId, args.id as string),
+          'contacts.remove',
+        );
+
       default:
         return { error: 'Unknown write tool', toolName };
     }
@@ -579,6 +609,21 @@ export class ToolExecutionService {
           search: args.search as string | undefined,
           limit:  (args.limit as number) ?? 20,
         });
+
+      case 'search_contacts':
+        return this.contacts.list(userId, {
+          search: args.search as string | undefined,
+          limit:  args.limit as number | undefined,
+        });
+
+      // Read-only look through the user's own mailbox. Finds candidates;
+      // saving is a separate, confirmation-gated create_contact call.
+      case 'search_mailbox_contacts':
+        return this.directory.search(
+          userId,
+          args.query as string,
+          args.limit as number | undefined,
+        );
 
       case 'read_emails': {
         const provider = await this.userEmailProvider(userId);
@@ -1041,6 +1086,34 @@ export class ToolExecutionService {
         return `Update homeowner info on CRM job ${args.jobId}`;
       case 'delete_note':
         return `Delete personal note ${args.noteId}`;
+
+      case 'create_contact': {
+        const who = [args.firstName, args.lastName].filter(Boolean).join(' ')
+          || (args.companyName as string) || 'a new contact';
+        const bits = [
+          args.companyName && `Company: ${args.companyName}`,
+          args.email       && `Email: ${args.email}`,
+          args.phone       && `Phone: ${args.phone}`,
+          [args.street1, args.city, args.state, args.zip].filter(Boolean).length
+            && `Address: ${[args.street1, args.street2, args.city, args.state, args.zip].filter(Boolean).join(', ')}`,
+        ].filter(Boolean);
+        const from = args.source && args.source !== 'manual'
+          ? ` (from your ${args.source === 'google' ? 'Gmail' : 'Outlook'} contacts)`
+          : '';
+        return `Add ${who} to your contacts${from}` +
+               (bits.length ? `\n${bits.join('\n')}` : '');
+      }
+
+      case 'update_contact': {
+        const changed = Object.keys(args)
+          .filter(k => !['id', 'pendingActionId'].includes(k))
+          .map(k => `${k}: ${args[k]}`);
+        return `Update contact ${args.id}` + (changed.length ? `\n${changed.join('\n')}` : '');
+      }
+
+      case 'delete_contact':
+        return `Delete contact ${args.id} from your address book`;
+
       default:
         return `Execute ${toolName}`;
     }

@@ -311,6 +311,17 @@ export class EmailOAuthService {
       // Calendar scopes — needed for GoogleCalendarService
       'https://www.googleapis.com/auth/calendar',
       'https://www.googleapis.com/auth/calendar.events',
+      // Contacts (read-only) — needed for DirectorySearchService.
+      //
+      // NOTE: Gmail contacts are NOT in the Gmail API. They live in the Google
+      // People API, so this ALSO requires the People API to be enabled on the
+      // Google Cloud project — otherwise the search returns 403 "has not been
+      // used in project …".
+      //
+      // Users who connected before this scope was added must reconnect Gmail
+      // once to grant it; a refresh token only carries the scopes it was
+      // issued with, so an existing connection cannot be upgraded in place.
+      'https://www.googleapis.com/auth/contacts.readonly',
     ];
 
     const configured = this.config.get<string>('GOOGLE_SCOPES');
@@ -327,6 +338,9 @@ export class EmailOAuthService {
       // connected before this scope was added must reconnect Outlook once
       // to grant it (their stored token only covers Mail).
       'https://graph.microsoft.com/Calendars.ReadWrite',
+      // Contacts (read-only) — needed for DirectorySearchService. Same
+      // reconnect caveat as Calendars above.
+      'https://graph.microsoft.com/Contacts.Read',
     ];
 
     const configured = this.config.get<string>('MICROSOFT_SCOPES');

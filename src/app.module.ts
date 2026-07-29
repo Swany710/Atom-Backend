@@ -14,6 +14,7 @@ import { CalendarModule } from './integrations/calendar/calendar.module';
 import { CrmModule } from './integrations/crm/crm.module';
 import { KnowledgeBaseModule } from './knowledge-base/knowledge-base.module';
 import { NotesModule } from './notes/notes.module';
+import { ContactsModule } from './contacts/contacts.module';
 import { ApiKeyGuard } from './guards/api-key.guard';
 import { HealthModule } from './health/health.module';
 import { AuditModule } from './audit/audit.module';
@@ -161,6 +162,7 @@ function buildSslConfig(supa: boolean): false | Record<string, unknown> {
     CrmModule,
     KnowledgeBaseModule,
     NotesModule,
+    ContactsModule,
   ],
 
   providers: [

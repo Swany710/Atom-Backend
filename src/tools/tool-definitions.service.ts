@@ -274,6 +274,117 @@ export class ToolDefinitionsService {
         },
       },
       {
+        name: 'search_contacts',
+        description:
+          "Search Atom's address book — the company's own saved contacts (suppliers, subs, " +
+          'adjusters, referrals). Returns name, company, phone, email, and address. ' +
+          'Read-only, no confirmation needed. This is NOT the AccuLynx job contacts — ' +
+          'use crm_get_contacts for those.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            search: { type: 'string', description: 'Name, company, email, phone, or city. Omit to list all.' },
+            limit:  { type: 'number', description: 'Max results (default 100)' },
+          },
+          required: [],
+        },
+      },
+      {
+        name: 'search_mailbox_contacts',
+        description:
+          "Search the user's connected Gmail or Outlook contacts for someone. Read-only — " +
+          'this FINDS people, it does NOT save them. Use it when the user asks to add ' +
+          'someone they already have in their email contacts ("add Jim from my contacts"). ' +
+          'Show what you found — name, company, phone, email, address — and ask which to ' +
+          'add, then call create_contact for each one they confirm. Never add everyone ' +
+          'returned; the user picks.\n' +
+          'If the result says needsReconnect, tell the user to reconnect their mailbox in ' +
+          'Settings → Connections to grant contacts access, and stop there.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            query: { type: 'string', description: 'Name, email, or company to look for' },
+            limit: { type: 'number', description: 'Max results (default 15)' },
+          },
+          required: ['query'],
+        },
+      },
+      {
+        name: 'create_contact',
+        description:
+          "Add someone to Atom's address book. REQUIRE confirmation before calling.\n" +
+          'Needs at least a first name, last name, or company name — everything else is ' +
+          'optional, so save what you have rather than interrogating the user for fields ' +
+          'they did not offer. If the person is already saved, the tool refuses and returns ' +
+          'the existing contact; tell the user rather than forcing a duplicate.\n' +
+          'When adding from a mailbox search, pass source and externalId straight through ' +
+          'from the search result so a later re-import recognises it.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            firstName:   { type: 'string' },
+            lastName:    { type: 'string' },
+            companyName: { type: 'string' },
+            title:       { type: 'string', description: 'Role or label, e.g. "adjuster", "supplier"' },
+            email:       { type: 'string' },
+            phone:       { type: 'string', description: 'Any format — stored as given' },
+            street1:     { type: 'string' },
+            street2:     { type: 'string' },
+            city:        { type: 'string' },
+            state:       { type: 'string' },
+            zip:         { type: 'string' },
+            notes:       { type: 'string' },
+            source:      { type: 'string', description: "'manual' | 'google' | 'outlook' — from the search result" },
+            externalId:  { type: 'string', description: 'Provider ID from the search result' },
+            allowDuplicate: {
+              type: 'boolean',
+              description: 'Only set true if the user explicitly said to add them anyway.',
+            },
+            pendingActionId: { type: 'string' },
+          },
+          required: [],
+        },
+      },
+      {
+        name: 'update_contact',
+        description:
+          "Update a contact in Atom's address book. REQUIRE confirmation before calling. " +
+          'Only pass the fields being changed.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            id:          { type: 'string', description: 'Contact ID from search_contacts' },
+            firstName:   { type: 'string' },
+            lastName:    { type: 'string' },
+            companyName: { type: 'string' },
+            title:       { type: 'string' },
+            email:       { type: 'string' },
+            phone:       { type: 'string' },
+            street1:     { type: 'string' },
+            street2:     { type: 'string' },
+            city:        { type: 'string' },
+            state:       { type: 'string' },
+            zip:         { type: 'string' },
+            notes:       { type: 'string' },
+            pendingActionId: { type: 'string' },
+          },
+          required: ['id'],
+        },
+      },
+      {
+        name: 'delete_contact',
+        description:
+          "Delete a contact from Atom's address book. REQUIRE confirmation before calling.",
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            id:              { type: 'string', description: 'Contact ID from search_contacts' },
+            pendingActionId: { type: 'string' },
+          },
+          required: ['id'],
+        },
+      },
+      {
         name: 'crm_email_job_contact',
         description:
           "Email the homeowner/primary contact on an AccuLynx job, and log the sent " +
@@ -689,6 +800,11 @@ export class ToolDefinitionsService {
     'delete_calendar_event',
     'crm_add_note',
     'crm_email_job_contact',
+    // Address book writes. search_contacts / search_mailbox_contacts stay
+    // ungated — reading is free, and mailbox search saves nothing.
+    'create_contact',
+    'update_contact',
+    'delete_contact',
     'crm_create_lead',
     'crm_update_job_details',
     'crm_update_insurance',
