@@ -10,6 +10,12 @@
  *  thin facade over VoiceOrchestratorService, so the substantive tests live here.)
  */
 
+// Stub the Google SDK before anything imports it — reached transitively via
+// ClaudeOrchestrator → ToolExecution → gmail.service. Loading the real
+// googleapis is slow and, on a OneDrive-backed checkout, fails with
+// "UNKNOWN: unknown error, read" on cloud-only files.
+jest.mock('googleapis', () => ({ google: { auth: { OAuth2: class {} }, gmail: () => ({}) } }));
+
 import { VoiceOrchestratorService } from '../voice-orchestrator.service';
 import { ClaudeOrchestratorService } from '../../claude/claude-orchestrator.service';
 import { ElevenLabsTranscriptionService } from '../../transcription/elevenlabs-transcription.service';

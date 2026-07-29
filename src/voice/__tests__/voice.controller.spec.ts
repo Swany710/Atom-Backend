@@ -1,3 +1,9 @@
+// Stub the Google SDK before anything imports it — VoiceController reaches it
+// transitively via VoiceService → ClaudeOrchestrator → ToolExecution →
+// gmail.service. Loading the real googleapis is slow and, on a OneDrive-backed
+// checkout, fails with "UNKNOWN: unknown error, read" on cloud-only files.
+jest.mock('googleapis', () => ({ google: { auth: { OAuth2: class {} }, gmail: () => ({}) } }));
+
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException } from '@nestjs/common';
 import { VoiceController } from '../voice.controller';

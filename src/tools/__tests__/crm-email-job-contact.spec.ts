@@ -15,6 +15,15 @@
  * record of it. These tests pin that split.
  */
 
+// Stub the Google SDK before anything imports it.
+//
+// The chain here is: this spec → ToolExecutionService → email.provider →
+// gmail.service → googleapis. None of that is under test, but loading the real
+// googleapis pulls in thousands of files and, on a OneDrive-backed checkout,
+// fails outright with "UNKNOWN: unknown error, read" when a dependency is still
+// a cloud placeholder. A unit test has no business loading it either way.
+jest.mock('googleapis', () => ({ google: { auth: { OAuth2: class {} }, gmail: () => ({}) } }));
+
 import { ToolExecutionService } from '../tool-execution.service';
 
 // ── Mock builders ───────────────────────────────────────────────────────────

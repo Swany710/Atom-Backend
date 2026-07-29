@@ -36,13 +36,66 @@ function makeAction(overrides: Partial<PendingAction> = {}): PendingAction {
   });
 }
 
+/**
+ * Does `row` satisfy a TypeORM criteria object?
+ *
+ * Understands the FindOperator forms the service actually uses (MoreThan /
+ * LessThan) and throws on anything else, so a new operator can't be silently
+ * treated as a match.
+ */
+function matchesCriteria(row: any, criteria: Record<string, any>): boolean {
+  return Object.entries(criteria).every(([key, expected]) => {
+    const actual = row[key];
+
+    if (expected && typeof expected === 'object' && 'type' in expected && 'value' in expected) {
+      const op  = (expected as any).type;
+      const val = (expected as any).value;
+      if (op === 'moreThan') return actual > val;
+      if (op === 'lessThan') return actual < val;
+      throw new Error(`spec does not model FindOperator "${op}" — extend matchesCriteria`);
+    }
+
+    return actual === expected;
+  });
+}
+
+/**
+ * Repository double that models a CONDITIONAL update.
+ *
+ * This matters. claim() is an atomic compare-and-swap: one
+ *   UPDATE … WHERE id=? AND userId=? AND status='pending' AND expiresAt > now
+ * is the only thing that flips pending → confirmed, so that under a double-click
+ * or a client retry exactly one caller sees affected === 1 and executes.
+ *
+ * A mock that returns { affected: 1 } unconditionally makes EVERY claim succeed
+ * regardless of the row the test seeded — which is what this spec used to do,
+ * and it meant every rejection path (expired, cancelled, already-confirmed,
+ * cross-user) was asserting against a fake. Evaluating the criteria for real is
+ * what gives these tests the power to catch a regression back to read-then-write.
+ *
+ * The row under test is whatever findOne is currently primed to return.
+ */
 function makeRepo() {
-  return {
+  const repo: any = {
     create:  jest.fn(),
     save:    jest.fn(),
     findOne: jest.fn(),
-    update:  jest.fn().mockResolvedValue({ affected: 1 }),
+    update:  jest.fn(async (criteria: any, patch: Record<string, unknown>) => {
+      const row = await repo.findOne();
+
+      // repo.update(id, patch) — the by-primary-key form (recordResult).
+      if (typeof criteria === 'string') {
+        if (row) Object.assign(row, patch);
+        return { affected: row ? 1 : 0 };
+      }
+
+      if (!row || !matchesCriteria(row, criteria)) return { affected: 0 };
+
+      Object.assign(row, patch);   // a real UPDATE mutates the row
+      return { affected: 1 };
+    }),
   };
+  return repo;
 }
 
 // Helper: extracts .reason from an error result without TS union complaint
@@ -131,13 +184,34 @@ describe('PendingActionService', () => {
       expect((result as any).action.id).toBe(action.id);
     });
 
-    it('marks the action as confirmed in the database', async () => {
+    it('claims atomically — the UPDATE itself guards status, owner and expiry', async () => {
       const action = makeAction();
       repo.findOne.mockResolvedValue(action);
 
       await service.claim(action.id, USER_ID);
 
-      expect(repo.update).toHaveBeenCalledWith(action.id, { status: 'confirmed' });
+      // Not update(id, patch). The WHERE clause is the lock: if this ever
+      // regresses to a read-then-write, two concurrent confirmations could both
+      // pass the status check and the action would execute twice.
+      const [criteria, patch] = repo.update.mock.calls[0];
+      expect(criteria.id).toBe(action.id);
+      expect(criteria.userId).toBe(USER_ID);
+      expect(criteria.status).toBe('pending');
+      expect(criteria.expiresAt).toBeDefined();       // MoreThan(now)
+      expect(patch).toEqual({ status: 'confirmed' });
+    });
+
+    it('flips the row to confirmed so a replay cannot claim it again', async () => {
+      const action = makeAction();
+      repo.findOne.mockResolvedValue(action);
+
+      const first = await service.claim(action.id, USER_ID);
+      expect(first.ok).toBe(true);
+
+      // Same row, second attempt — the conditional UPDATE must now miss.
+      const replay = await service.claim(action.id, USER_ID);
+      expect(replay.ok).toBe(false);
+      expect(reason(replay)).toBe('already_confirmed');
     });
 
     it('emits a pending_action_confirmed audit log', async () => {
@@ -206,7 +280,12 @@ describe('PendingActionService', () => {
 
       expect(result.ok).toBe(false);
       expect(reason(result)).toBe('expired');
-      expect(repo.update).toHaveBeenCalledWith(action.id, { status: 'expired' });
+      // Second UPDATE marks it expired — also conditional on still being
+      // 'pending', so it can't stomp an action someone else just confirmed.
+      expect(repo.update).toHaveBeenCalledWith(
+        { id: action.id, status: 'pending' },
+        { status: 'expired' },
+      );
     });
 
     it('emits pending_action_expired audit on clock-based expiry', async () => {
