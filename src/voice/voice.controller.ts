@@ -229,6 +229,11 @@ export class VoiceController {
         userId,
         convoId,
         file.mimetype,
+        // synthesise: false — this handler returns JSON and has no audio field,
+        // so any MP3 generated here is billed and then dropped on the floor.
+        // The same fix landed on POST /voice; this legacy alias was missed and
+        // kept paying for a second ElevenLabs generation nobody could hear.
+        { synthesise: false },
       );
       return {
         message:        result.response,
