@@ -110,6 +110,10 @@ describe('PendingActionService', () => {
   let repo: ReturnType<typeof makeRepo>;
   let audit: { logWrite: jest.Mock };
 
+  // Held so afterEach can close it — an unclosed TestingModule keeps its
+  // injector alive and leaves the Jest worker unable to exit (hangs CI).
+  let testingModule: TestingModule;
+
   beforeEach(async () => {
     repo  = makeRepo();
     audit = { logWrite: jest.fn() };
@@ -123,7 +127,12 @@ describe('PendingActionService', () => {
       ],
     }).compile();
 
+    testingModule = module;
     service = module.get<PendingActionService>(PendingActionService);
+  });
+
+  afterEach(async () => {
+    await testingModule?.close();
   });
 
   // ── create ────────────────────────────────────────────────────────────────

@@ -82,8 +82,15 @@ describe('AuthService', () => {
   let jwtService: { sign: jest.Mock };
   let dataSource: ReturnType<typeof makeDataSource>;
 
+  // Held so afterEach can close it. An unclosed TestingModule keeps its
+  // injector (and anything with an onModuleDestroy hook) alive for the whole
+  // run, which is what leaves the Jest worker unable to exit — harmless
+  // locally, a hung job in CI.
+  let testingModule: TestingModule | undefined;
+
   async function build(ds = makeDataSource({ savedUser: makeUser() })) {
     dataSource = ds;
+    if (testingModule) { await testingModule.close(); testingModule = undefined; }
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuthService,
@@ -93,6 +100,7 @@ describe('AuthService', () => {
         { provide: DataSource,                       useValue: dataSource },
       ],
     }).compile();
+    testingModule = module;
     service = module.get<AuthService>(AuthService);
   }
 
@@ -101,6 +109,11 @@ describe('AuthService', () => {
     orgRepo    = makeRepo();
     jwtService = { sign: jest.fn().mockReturnValue('signed.jwt.token') };
     await build();
+  });
+
+  afterEach(async () => {
+    await testingModule?.close();
+    testingModule = undefined;
   });
 
   // ── register ──────────────────────────────────────────────────────────────

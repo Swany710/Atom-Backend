@@ -61,6 +61,14 @@ export function withTimeout<T>(
       timeoutMs,
     );
 
+    // unref: a pending timeout must not by itself hold the event loop open.
+    // Without this, a 60s AI timeout armed at the end of a run keeps the
+    // process alive for the remainder of that window — invisible in a
+    // long-lived server, but it is exactly what makes a Jest worker refuse to
+    // exit and a CI job hang. Node only unrefs real Timeout objects; guard for
+    // fake timers and non-Node environments.
+    if (typeof (timer as any)?.unref === 'function') (timer as any).unref();
+
     fn()
       .then((value) => { clearTimeout(timer); resolve(value); })
       .catch((err)  => { clearTimeout(timer); reject(err); });
@@ -69,9 +77,15 @@ export function withTimeout<T>(
 
 /**
  * Sleep helper for exponential back-off.
+ *
+ * Also unref'd — an in-flight retry back-off should not keep the process (or a
+ * Jest worker) alive on its own.
  */
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    if (typeof (timer as any)?.unref === 'function') (timer as any).unref();
+  });
 }
 
 /**

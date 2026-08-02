@@ -49,6 +49,10 @@ function makeMockRes() {
 describe('VoiceController', () => {
   let controller: VoiceController;
 
+  // Held so afterEach can close it — an unclosed TestingModule keeps its
+  // injector alive and leaves the Jest worker unable to exit (hangs CI).
+  let testingModule: TestingModule;
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [VoiceController],
@@ -58,6 +62,7 @@ describe('VoiceController', () => {
       ],
     }).compile();
 
+    testingModule = module;
     controller = module.get<VoiceController>(VoiceController);
     jest.clearAllMocks();
 
@@ -74,6 +79,10 @@ describe('VoiceController', () => {
       { id: 1, sessionId: 'conv-abc', role: 'user', content: 'Hi', createdAt: new Date() },
     ]);
     (mockMemory.clearSession as jest.Mock).mockResolvedValue(undefined);
+  });
+
+  afterEach(async () => {
+    await testingModule?.close();
   });
 
   // ── GET /ai/health ────────────────────────────────────────────────────────

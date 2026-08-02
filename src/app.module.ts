@@ -2,7 +2,7 @@ import { Module, MiddlewareConsumer, NestModule } from '@nestjs/common';
 import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { JwtModule } from '@nestjs/jwt';
 import { ScheduleModule } from '@nestjs/schedule';
 import * as dns from 'dns';
@@ -16,6 +16,7 @@ import { KnowledgeBaseModule } from './knowledge-base/knowledge-base.module';
 import { NotesModule } from './notes/notes.module';
 import { ContactsModule } from './contacts/contacts.module';
 import { ApiKeyGuard } from './guards/api-key.guard';
+import { UserThrottlerGuard } from './guards/user-throttler.guard';
 import { HealthModule } from './health/health.module';
 import { AuditModule } from './audit/audit.module';
 import { AuthModule } from './auth/auth.module';
@@ -39,6 +40,22 @@ const isSupabasePooler = (url?: string): boolean =>
 
 const isSupabase = (url?: string): boolean =>
   !!url && url.includes('supabase');
+
+/**
+ * Max pooled DB connections for THIS Node process.
+ *
+ * Defaults are deliberately modest rather than maximal: the real ceiling is
+ * `value × number of replicas`, and exhausting the Supabase connection limit
+ * fails every query at once rather than merely queuing them. Raise
+ * DATABASE_POOL_MAX when you add replicas or measure pool saturation.
+ */
+function poolMax(pooler: boolean): number {
+  const override = Number(process.env.DATABASE_POOL_MAX);
+  if (Number.isFinite(override) && override > 0) return Math.floor(override);
+  // Transaction pooler multiplexes server-side, so client connections are cheap.
+  // A direct connection holds a real backend process per slot — stay lower.
+  return pooler ? 20 : 10;
+}
 
 /**
  * Build the TypeORM/pg `ssl` option.
@@ -107,8 +124,23 @@ function buildSslConfig(supa: boolean): false | Record<string, unknown> {
           // and log a warning so the gap is visible.
           ssl: buildSslConfig(supa),
 
+          // ── Connection pool ──────────────────────────────────────────────
+          // Was a flat 3 (pooler) / 5 (direct). That is a handful of
+          // simultaneous queries for the WHOLE service — fine for one or two
+          // people, a queue for a growing team, since every request that needs
+          // the DB waits behind those slots.
+          //
+          // Sizing constraint, which is why this is not simply "make it big":
+          // the ceiling is per Node process, and Railway may run more than one
+          // replica. Total connections = DATABASE_POOL_MAX × replicas, and that
+          // total must stay under the Postgres/Supabase limit for this role.
+          // Supabase's transaction pooler multiplexes, so it tolerates more
+          // client connections than a direct connection does — hence the higher
+          // default there.
+          //
+          // Override with DATABASE_POOL_MAX when you scale replicas.
           extra: {
-            max:                     pooler ? 3 : 5,
+            max:                     poolMax(pooler),
             connectionTimeoutMillis: 15_000,
             idleTimeoutMillis:       30_000,
             // Pooler doesn't support named prepared statements
@@ -166,8 +198,11 @@ function buildSslConfig(supa: boolean): false | Record<string, unknown> {
   ],
 
   providers: [
+    // ORDER IS LOAD-BEARING. APP_GUARDs run in registration order, and
+    // UserThrottlerGuard buckets on `req.atomUserId`, which ApiKeyGuard sets.
+    // Swap these and rate limiting silently degrades back to one shared bucket.
     { provide: APP_GUARD, useClass: ApiKeyGuard },
-    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    { provide: APP_GUARD, useClass: UserThrottlerGuard },
     // Tenant context: bridges guard fields into AsyncLocalStorage after auth
     { provide: APP_INTERCEPTOR, useClass: TenantContextInterceptor },
   ],

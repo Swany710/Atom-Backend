@@ -76,14 +76,23 @@ function isApiValid(msgs: MessageParam[]): boolean {
 
 // sanitizeHistory is private; these tests are the contract for it, so reach in
 // deliberately rather than exposing it on the public surface.
-function makeService(): ConversationMemoryService {
+function makeService(summary: string | null = null): ConversationMemoryService {
   const repo = {} as any;
   const tenantContext = { get: () => undefined } as any;
-  return new ConversationMemoryService(repo, tenantContext);
+  const summarizer = {
+    getSummary:   jest.fn().mockResolvedValue(summary),
+    rollIfNeeded: jest.fn().mockResolvedValue(undefined),
+    clearSession: jest.fn().mockResolvedValue(undefined),
+  } as any;
+  return new ConversationMemoryService(repo, tenantContext, summarizer);
 }
 
 function sanitize(msgs: MessageParam[]): MessageParam[] {
   return (makeService() as any).sanitizeHistory('spec-session', msgs);
+}
+
+function trimLeading(msgs: MessageParam[]): MessageParam[] {
+  return (makeService() as any).trimLeadingAssistant('spec-session', msgs);
 }
 
 const hasToolResult = (m?: MessageParam) =>
@@ -178,6 +187,68 @@ describe('ConversationMemoryService.sanitizeHistory', () => {
     it('never leaves history ending on an unanswered tool_result', () => {
       const out = sanitize([text('user', 'x'), toolUse('toolu_5'), toolResult('toolu_5')]);
       expect(hasToolResult(out[out.length - 1])).toBe(false);
+    });
+  });
+
+  describe('the window must open on a user turn', () => {
+    // Anthropic: "The first message must always use the user role." The window
+    // boundary is arbitrary (newest N rows), so it can land on an assistant row
+    // and 400 the whole request.
+
+    it('drops leading assistant messages', () => {
+      const out = trimLeading([
+        text('assistant', 'orphaned tail of an earlier turn'),
+        text('assistant', 'still assistant'),
+        text('user', 'the real start'),
+        text('assistant', 'reply'),
+      ]);
+
+      expect(out).toHaveLength(2);
+      expect(out[0].role).toBe('user');
+    });
+
+    it('leaves history that already opens on a user turn untouched', () => {
+      const input = [text('user', 'hi'), text('assistant', 'hello')];
+      expect(trimLeading(input)).toEqual(input);
+    });
+
+    it('handles history that is entirely assistant messages', () => {
+      expect(trimLeading([text('assistant', 'a'), text('assistant', 'b')])).toHaveLength(0);
+    });
+
+    it('handles an empty history', () => {
+      expect(trimLeading([])).toHaveLength(0);
+    });
+  });
+
+  describe('rolling summary injection', () => {
+    const withSummary = (svc: ConversationMemoryService, msgs: MessageParam[]) =>
+      (svc as any).withSummary('spec-session', msgs) as Promise<MessageParam[]>;
+
+    it('returns history unchanged when no summary exists', async () => {
+      const input = [text('user', 'hi'), text('assistant', 'hello')];
+      expect(await withSummary(makeService(null), input)).toEqual(input);
+    });
+
+    it('prepends a user/assistant pair so alternation and the user-first rule hold', async () => {
+      const out = await withSummary(
+        makeService('Job 4821 at 12 Oak St. Roof replacement approved.'),
+        [text('user', 'what was that address again?')],
+      );
+
+      expect(out).toHaveLength(3);
+      expect(out[0].role).toBe('user');
+      expect(out[1].role).toBe('assistant');
+      expect(out[2].role).toBe('user');
+      expect(String(out[0].content)).toContain('12 Oak St');
+    });
+
+    it('survives a summarizer that throws rather than breaking the turn', async () => {
+      const svc = makeService();
+      (svc as any).summarizer.getSummary = jest.fn().mockRejectedValue(new Error('down'));
+
+      const input = [text('user', 'hi')];
+      await expect(withSummary(svc, input)).resolves.toEqual(input);
     });
   });
 

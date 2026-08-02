@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import type { MessageParam } from '@anthropic-ai/sdk/resources/messages';
 import { ChatMemory } from './chat-memory.entity';
+import { ConversationSummarizerService } from './conversation-summarizer.service';
 import { TenantContextService } from '../organizations/tenant-context.service';
 
 /**
@@ -14,13 +15,22 @@ import { TenantContextService } from '../organizations/tenant-context.service';
  *   - Load conversation history as Anthropic MessageParam[] for the orchestrator
  *   - Sanitize history to remove orphaned tool_use/tool_result pairs that
  *     result from interrupted requests (prevents Anthropic 400 errors)
+ *   - Prepend the rolling summary of turns that have scrolled out of the window
  *   - Persist the full new-message set after each turn (appendMessages)
  *   - Return raw entity rows for the history API endpoint (getRawMessages)
  *   - Clear a session on demand (clearSession)
  */
 @Injectable()
 export class ConversationMemoryService {
-  /** Max message rows loaded per turn (40 rows = ~20 user/assistant exchanges). */
+  /**
+   * Max message rows loaded VERBATIM per turn (40 rows = ~20 exchanges).
+   *
+   * This is no longer a memory cliff. Rows older than the window are folded
+   * into a rolling summary by ConversationSummarizerService and prepended to
+   * the history, so the model keeps the thread instead of forgetting it
+   * mid-project. The limit now controls verbatim fidelity and token cost, not
+   * how far back Atom can remember.
+   */
   static readonly HISTORY_LIMIT = 40;
 
   private readonly logger = new Logger(ConversationMemoryService.name);
@@ -29,14 +39,22 @@ export class ConversationMemoryService {
     @InjectRepository(ChatMemory)
     private readonly repo: Repository<ChatMemory>,
     private readonly tenantContext: TenantContextService,
+    private readonly summarizer: ConversationSummarizerService,
   ) {}
 
   // ── Read ──────────────────────────────────────────────────────────────────
 
   /**
    * Load recent conversation history for a session as Anthropic MessageParam[].
-   * Runs sanitizeHistory() before returning so that orphaned tool pairs from
-   * interrupted requests never reach the Anthropic API.
+   *
+   * Pipeline:
+   *   1. newest `limit` rows, restored to chronological order
+   *   2. sanitizeHistory() — strips orphaned tool_use/tool_result pairs left by
+   *      interrupted requests, which Anthropic rejects with a 400
+   *   3. trim leading assistant turns — Anthropic requires the first message to
+   *      use the `user` role, and an arbitrary window boundary can land on an
+   *      assistant row
+   *   4. prepend the rolling summary of everything older than the window
    */
   async loadHistory(
     sessionId: string,
@@ -64,7 +82,83 @@ export class ConversationMemoryService {
       return { role: m.role as 'user' | 'assistant', content };
     });
 
-    return this.sanitizeHistory(sessionId, raw);
+    const clean = this.trimLeadingAssistant(
+      sessionId,
+      this.sanitizeHistory(sessionId, raw),
+    );
+
+    return this.withSummary(sessionId, clean);
+  }
+
+  /**
+   * Anthropic requires the first message in `messages` to use the `user` role.
+   *
+   * loadHistory() takes the newest `limit` rows, so the window boundary is
+   * arbitrary and can land mid-turn, leaving an assistant message first. That
+   * request fails outright. Drop leading assistant messages so the window
+   * always opens on a user turn — the dropped content is covered by the
+   * rolling summary.
+   */
+  private trimLeadingAssistant(
+    sessionId: string,
+    messages: MessageParam[],
+  ): MessageParam[] {
+    let i = 0;
+    while (i < messages.length && messages[i].role === 'assistant') i++;
+    if (i > 0) {
+      this.logger.log(
+        `[${sessionId}] dropped ${i} leading assistant message(s) — history ` +
+        `window must open on a user turn`,
+      );
+    }
+    return i === 0 ? messages : messages.slice(i);
+  }
+
+  /**
+   * Prepend the rolling summary of everything that has scrolled out of the
+   * window, as a synthetic user turn plus a short assistant acknowledgement.
+   *
+   * Why a message pair rather than a system block: loadHistory() is consumed by
+   * two orchestrator paths that both build their own system prompt, and the
+   * static half of that prompt is cache-controlled. Injecting per-session text
+   * there would change the cached prefix on every session and turn every
+   * prompt-cache hit into a miss. A leading message pair costs nothing from the
+   * cache and needs no change at either call site.
+   *
+   * trimLeadingAssistant() has already guaranteed the real history opens on a
+   * user turn, so user → assistant → user alternation holds.
+   */
+  private async withSummary(
+    sessionId: string,
+    messages: MessageParam[],
+  ): Promise<MessageParam[]> {
+    let summary: string | null = null;
+    try {
+      summary = await this.summarizer.getSummary(sessionId);
+    } catch (err) {
+      // A summary lookup must never take down a live turn.
+      this.logger.warn(
+        `[${sessionId}] could not load conversation summary: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+    if (!summary) return messages;
+
+    return [
+      {
+        role: 'user',
+        content:
+          'Context from earlier in this same conversation, before the messages ' +
+          'that follow. Treat these as things you already know and have already ' +
+          `discussed with me — do not ask me to repeat them:\n\n${summary}`,
+      },
+      {
+        role: 'assistant',
+        content: 'Understood — I have that earlier context and will carry it forward.',
+      },
+      ...messages,
+    ];
   }
 
   /**
@@ -297,6 +391,19 @@ export class ConversationMemoryService {
       createdAt: new Date(base + i),
     }));
     await this.repo.save(rows);
+
+    // Fold anything that just scrolled out of the window into the rolling
+    // summary. Deliberately NOT awaited: this makes a Claude call, and the
+    // user is waiting on the response we just produced. rollIfNeeded() never
+    // throws and never rejects, so the floating promise is safe; the .catch()
+    // is belt-and-braces against a future refactor making it throw.
+    void this.summarizer
+      .rollIfNeeded(sessionId, ConversationMemoryService.HISTORY_LIMIT)
+      .catch(err => this.logger.warn(
+        `[${sessionId}] summary roll failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      ));
   }
 
   /**
@@ -307,9 +414,12 @@ export class ConversationMemoryService {
   }
 
   /**
-   * Delete all stored messages for a session.
+   * Delete all stored messages for a session, including its rolling summary.
+   * Clearing the messages but leaving the summary behind would let a "start
+   * over" still surface the old conversation.
    */
   async clearSession(sessionId: string): Promise<void> {
     await this.repo.delete({ sessionId });
+    await this.summarizer.clearSession(sessionId);
   }
 }

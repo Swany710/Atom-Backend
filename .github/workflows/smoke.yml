@@ -1,0 +1,35 @@
+name: Daily audio smoke test
+
+# The unit suite mocks every provider, which is correct and also means it can
+# never tell you that a provider changed underneath you. In May a model was
+# retired and nothing noticed until July. This job calls the real thing, every
+# morning, so that gap is at most one day.
+on:
+  schedule:
+    # 12:00 UTC ≈ 07:00 CT — red before the workday rather than during it.
+    - cron: '0 12 * * *'
+  workflow_dispatch:   # run on demand right after a provider or model change
+
+jobs:
+  smoke:
+    name: Round-trip a real audio clip
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # No install step: the script uses only Node 20 built-ins (fetch,
+      # FormData, Blob). Nothing to break, nothing to keep up to date.
+      - name: Audio round trip
+        env:
+          # Repository secrets:
+          #   ATOM_BASE_URL — deployed backend root, e.g. https://atom-backend.up.railway.app
+          #   ATOM_API_KEY  — the API_KEY value from Railway (owner-level credential)
+          ATOM_BASE_URL: ${{ secrets.ATOM_BASE_URL }}
+          ATOM_API_KEY:  ${{ secrets.ATOM_API_KEY }}
+        run: node scripts/smoke-audio.mjs

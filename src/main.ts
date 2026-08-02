@@ -1,4 +1,5 @@
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
 import { validateProductionEnv, reportCapabilities } from './config/env.validation';
@@ -45,8 +46,37 @@ process.on('uncaughtException', (err: Error) => {
 });
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  // Typed as NestExpressApplication so `app.set('trust proxy', …)` below is
+  // available — the base INestApplication interface does not expose it.
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
   console.log('APP BOOTSTRAPPED');
+
+  // ── Trust proxy ───────────────────────────────────────────────────────────
+  // Without this, Express reports the proxy's address as req.ip for every
+  // request, so IP-based rate limiting collapsed into a single shared bucket
+  // for the entire user base (see UserThrottlerGuard).
+  //
+  // The value is the number of trusted hops in front of this process. Express
+  // then reads the client address that many entries from the right of
+  // X-Forwarded-For. Set it to the ACTUAL depth of your proxy chain: too low
+  // and you bucket on your own proxy again, too high and a client can spoof
+  // its address by sending its own X-Forwarded-For header.
+  //
+  // In production the default is 1: the atom-frontend proxy, which strips the
+  // client's X-Forwarded-For and replaces it with the address it observed. Add
+  // a hop for each additional proxy or CDN.
+  //
+  // OUTSIDE production the default is 0, and that matters. "Trust one hop" with
+  // nothing actually in front means trusting a header the client wrote, which
+  // lets a client choose its own rate-limit bucket. Being wrong low costs a
+  // shared bucket; being wrong high costs the limit entirely.
+  //
+  // This only affects the ANONYMOUS bucket. Authenticated requests bucket on the
+  // JWT subject, which no header can forge.
+  const trustProxyHops = Number(
+    process.env.TRUST_PROXY_HOPS ?? (process.env.NODE_ENV === 'production' ? 1 : 0),
+  );
+  app.set('trust proxy', Number.isFinite(trustProxyHops) ? trustProxyHops : 0);
 
   // ── Global exception filter ──────────────────────────────────────────────
   app.useGlobalFilters(new GlobalExceptionFilter());
